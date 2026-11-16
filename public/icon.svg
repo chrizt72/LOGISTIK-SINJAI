@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <!-- Barcode bars in safe zone -->
+  <g fill="#ffffff" opacity="0.92">
+    <rect x="116" y="136" width="20" height="176" rx="4" />
+    <rect x="152" y="136" width="12" height="176" rx="3" />
+    <rect x="180" y="136" width="28" height="176" rx="4" />
+    <rect x="224" y="136" width="12" height="176" rx="3" />
+    <rect x="328" y="136" width="16" height="176" rx="4" />
+    <rect x="360" y="136" width="36" height="176" rx="4" />
+  </g>
+  <!-- PLN Electric Bolt Accent -->
+  <path d="M294 116L222 238H274L246 340L334 206H278L294 116Z" fill="#f59e0b" stroke="#0f172a" stroke-width="8" stroke-linejoin="round" />
+  <!-- Scanner Laser Line -->
+  <rect x="96" y="220" width="320" height="10" rx="5" fill="#10b981" />
+  <!-- Label -->
+  <text x="256" y="392" font-family="monospace, sans-serif" font-size="42" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="3">SIMLOG PLN</text>
+</svg>

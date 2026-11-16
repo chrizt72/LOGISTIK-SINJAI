@@ -1,0 +1,6 @@
+{
+  "name": "SIMLOG PLN ULP Sinjai — Monitoring Material Gudang",
+  "description": "Sistem informasi monitoring stok material masuk dan keluar berbasis scan barcode Serial Number (SN) untuk Gudang Logistik PLN ULP Sinjai.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
