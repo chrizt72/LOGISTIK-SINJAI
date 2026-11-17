@@ -23,13 +23,19 @@ export const GoogleSheetsConfirmModal: React.FC<GoogleSheetsConfirmModalProps> =
   onCancel,
 }) => {
   const [isExecuting, setIsExecuting] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
 
   if (!mutation) return null;
 
   const handleConfirm = async () => {
     setIsExecuting(true);
+    setExecError(null);
     try {
       await mutation.onConfirm();
+    } catch (err: any) {
+      setExecError(
+        err?.message || 'Gagal menulis data ke Google Sheets. Pastikan Anda sudah login Google.'
+      );
     } finally {
       setIsExecuting(false);
     }
@@ -70,6 +76,11 @@ export const GoogleSheetsConfirmModal: React.FC<GoogleSheetsConfirmModalProps> =
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
+          {execError && (
+            <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-900 dark:text-red-200 font-semibold">
+              {execError}
+            </div>
+          )}
           <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="space-y-1 text-xs text-amber-950 dark:text-amber-100">

@@ -788,14 +788,51 @@ export async function overwriteGoogleSheetRows(
   }
 }
 
+export async function resolveOrEnsureMaterialSheetTab(
+  accessToken: string,
+  spreadsheetId: string,
+  preferredTitle: string
+): Promise<string> {
+  try {
+    const meta = await getSpreadsheetMetadata(accessToken, spreadsheetId);
+    const exactMatch = meta.sheets.find(
+      (s) => s.title.toUpperCase() === preferredTitle.toUpperCase()
+    );
+    if (exactMatch) {
+      return exactMatch.title;
+    }
+
+    const fallbackMatch =
+      meta.sheets.find(
+        (s) =>
+          s.title.toUpperCase() === 'MATERIAL_MASUK' ||
+          s.title.toUpperCase() === 'MATERIAL'
+      ) ||
+      meta.sheets.find((s) => s.sheetId === 0) ||
+      meta.sheets[0];
+
+    if (fallbackMatch) {
+      return fallbackMatch.title;
+    }
+  } catch {
+    // Fallback to preferredTitle
+  }
+  return preferredTitle || 'MATERIAL_MASUK';
+}
+
 export async function appendInboundRowsToGoogleSheet(
   accessToken: string,
   spreadsheetId: string,
   sheetTitle: string,
   newRows: MaterialRow[]
-): Promise<void> {
+): Promise<string> {
+  const actualTab = await resolveOrEnsureMaterialSheetTab(
+    accessToken,
+    spreadsheetId,
+    sheetTitle
+  );
   const values = newRows.map((r) => materialRowToSheetValues(r));
-  const appendRange = encodeURIComponent(`${sheetTitle}!A:O`);
+  const appendRange = encodeURIComponent(`${actualTab}!A:O`);
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -820,6 +857,7 @@ export async function appendInboundRowsToGoogleSheet(
         `Gagal menambahkan baris Material Masuk ke Google Sheets (${res.status})`
     );
   }
+  return actualTab;
 }
 
 export async function updateOutboundStatusInGoogleSheet(
@@ -828,9 +866,15 @@ export async function updateOutboundStatusInGoogleSheet(
   sheetTitle: string,
   updatedRows: MaterialRow[],
   addedMimsRows: EksekusiMimsRow[] = []
-): Promise<void> {
+): Promise<string> {
+  const actualTab = await resolveOrEnsureMaterialSheetTab(
+    accessToken,
+    spreadsheetId,
+    sheetTitle
+  );
+
   // 1. Fetch current Column B (SN MATERIAL) from Sheet "MATERIAL_MASUK" to map exact row numbers
-  const snRange = encodeURIComponent(`${sheetTitle}!B1:B5000`);
+  const snRange = encodeURIComponent(`${actualTab}!B1:B5000`);
   const readRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -855,19 +899,25 @@ export async function updateOutboundStatusInGoogleSheet(
   }
 
   const dataPayload: { range: string; majorDimension: string; values: string[][] }[] = [];
+  const rowsToAppend: MaterialRow[] = [];
 
   for (const row of updatedRows) {
-    const targetRowNum = snIndexMap.get(row.snMaterial.toUpperCase()) || row.rowNumber;
-    if (targetRowNum && targetRowNum >= 2) {
+    const foundRowNum = snIndexMap.get(row.snMaterial.toUpperCase());
+    if (foundRowNum && foundRowNum >= 2) {
       dataPayload.push({
-        range: `${sheetTitle}!A${targetRowNum}`,
+        range: `${actualTab}!A${foundRowNum}`,
         majorDimension: 'ROWS',
         values: [[row.tanggalHistory]],
       });
       dataPayload.push({
-        range: `${sheetTitle}!O${targetRowNum}`,
+        range: `${actualTab}!O${foundRowNum}`,
         majorDimension: 'ROWS',
         values: [['TERPAKAI']],
+      });
+    } else {
+      rowsToAppend.push({
+        ...row,
+        status: 'TERPAKAI',
       });
     }
   }
@@ -899,8 +949,31 @@ export async function updateOutboundStatusInGoogleSheet(
     }
   }
 
+  if (rowsToAppend.length > 0) {
+    const appendValues = rowsToAppend.map((r) => materialRowToSheetValues(r));
+    const appendRange = encodeURIComponent(`${actualTab}!A:O`);
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+        spreadsheetId
+      )}/values/${appendRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          majorDimension: 'ROWS',
+          values: appendValues,
+        }),
+      }
+    );
+  }
+
   // 2. Automatically append the outgoing material rows + timestamp to Sheet "EKSEKUSI_MIMS"
   if (addedMimsRows.length > 0) {
     await appendMimsRowsToGoogleSheet(accessToken, spreadsheetId, addedMimsRows, 'EKSEKUSI_MIMS');
   }
+  return actualTab;
 }
+

@@ -3,13 +3,14 @@ import {
   QrCode,
   CheckCircle2,
   AlertTriangle,
-  XOctagon,
   Layers,
   Camera,
   FileSpreadsheet,
   Trash2,
   X,
   RefreshCw,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
 
 export interface ScannedSnItemPreview {
@@ -37,9 +38,10 @@ interface QrScannedListPopupProps {
   totalReadyInColumn: number;
   isImporting: boolean;
   onClose: () => void;
+  onSwitchMode: (newMode: 'MASUK' | 'KELUAR') => void;
   onScanMoreCamera: () => void;
   onRemoveItem: (snMaterial: string) => void;
-  onImportNow: () => Promise<void>;
+  onImportNow: (targetMode: 'MASUK' | 'KELUAR') => Promise<void>;
 }
 
 export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
@@ -50,20 +52,19 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
   totalReadyInColumn,
   isImporting,
   onClose,
+  onSwitchMode,
   onScanMoreCamera,
   onRemoveItem,
   onImportNow,
 }) => {
   if (!isOpen || latestScannedItems.length === 0) return null;
 
-  const validItems = latestScannedItems.filter(
-    (i) => i.validationStatus === 'VALID_MASUK' || i.validationStatus === 'VALID_KELUAR'
-  );
-  const invalidItems = latestScannedItems.filter(
-    (i) => i.validationStatus !== 'VALID_MASUK' && i.validationStatus !== 'VALID_KELUAR'
-  );
-
   const isBundle = qrType === 'BUNDLE' || latestScannedItems.length > 1;
+  const importCount = Math.max(totalReadyInColumn, latestScannedItems.length);
+
+  const alreadyTerpakaiItems = latestScannedItems.filter(
+    (i) => i.validationStatus === 'SUDAH_TERPAKAI'
+  );
 
   return (
     <div
@@ -97,9 +98,7 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
               <div className="flex flex-wrap items-center gap-1.5">
                 <span
                   className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded uppercase ${
-                    isBundle
-                      ? 'bg-sky-600 text-white'
-                      : 'bg-emerald-600 text-white'
+                    isBundle ? 'bg-sky-600 text-white' : 'bg-emerald-600 text-white'
                   }`}
                 >
                   {isBundle
@@ -107,7 +106,7 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
                     : 'QR MATERIAL TUNGGAL (1 SN)'}
                 </span>
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  · Mode {mode === 'MASUK' ? 'Material Masuk' : 'Material Keluar'}
+                  · Siap Import Spreadsheet
                 </span>
               </div>
               <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate mt-0.5">
@@ -129,36 +128,83 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
 
         {/* Body */}
         <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
+          {/* Mode Selector Pill inside Popup so Officer can choose Masuk vs Keluar directly */}
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+              Pilih Tujuan Import Spreadsheet:
+            </div>
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={() => onSwitchMode('MASUK')}
+                className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                  mode === 'MASUK'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                }`}
+              >
+                <ArrowDownLeft className="w-4 h-4 shrink-0" />
+                <span>Material Masuk (STOK SIAP)</span>
+              </button>
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={() => onSwitchMode('KELUAR')}
+                className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                  mode === 'KELUAR'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                }`}
+              >
+                <ArrowUpRight className="w-4 h-4 shrink-0" />
+                <span>Material Keluar (TERPAKAI)</span>
+              </button>
+            </div>
+          </div>
+
           {/* Summary Banner */}
-          <div className="p-3 rounded-xl bg-emerald-50/90 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-800/80 flex items-start justify-between gap-3 text-xs">
+          <div
+            className={`p-3 rounded-xl border flex items-start justify-between gap-3 text-xs ${
+              mode === 'MASUK'
+                ? 'bg-emerald-50/90 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800/80 text-emerald-950 dark:text-emerald-100'
+                : 'bg-amber-50/90 dark:bg-amber-950/35 border-amber-200 dark:border-amber-800/80 text-amber-950 dark:text-amber-100'
+            }`}
+          >
             <div className="flex items-start gap-2.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-              <div className="space-y-0.5 text-emerald-950 dark:text-emerald-100">
+              <CheckCircle2
+                className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  mode === 'MASUK'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                }`}
+              />
+              <div className="space-y-0.5">
                 <div className="font-bold">
-                  {validItems.length} dari {latestScannedItems.length} SN Masuk ke Kolom List Siap
-                  Import Spreadsheet
+                  {latestScannedItems.length} SN Telah Masuk ke Kolom List Siap Import Spreadsheet
                 </div>
                 <p className="text-[11px] opacity-90 leading-relaxed">
                   {mode === 'MASUK'
-                    ? 'SN valid telah masuk ke Kolom List Siap Import dan siap ditambahkan melanjutkan baris Sheet "MATERIAL_MASUK" dengan status STOK SIAP.'
-                    : 'SN valid cocok dengan Sheet "MATERIAL_MASUK" (STOK SIAP) dan siap diubah statusnya menjadi TERPAKAI.'}
+                    ? 'Klik tombol Import di bawah untuk memasukkan deretan SN ini ke Sheet "MATERIAL_MASUK" dengan status STOK SIAP.'
+                    : 'Klik tombol Import di bawah untuk mengubah status SN ini menjadi TERPAKAI pada "MATERIAL_MASUK" & mencatat ke "EKSEKUSI_MIMS".'}
                 </p>
               </div>
             </div>
-            <span className="font-mono font-bold text-xs px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 shrink-0 tabular-nums">
-              Total List: {totalReadyInColumn} SN
+            <span className="font-mono font-bold text-xs px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 shrink-0 tabular-nums">
+              Siap: {importCount} SN
             </span>
           </div>
 
-          {invalidItems.length > 0 && (
+          {alreadyTerpakaiItems.length > 0 && mode === 'KELUAR' && (
             <div className="p-3 rounded-xl bg-red-50/90 dark:bg-red-950/40 border border-red-200 dark:border-red-800 flex items-start gap-2.5 text-xs text-red-900 dark:text-red-200">
               <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
               <div>
                 <span className="font-bold">
-                  {invalidItems.length} SN dilewati otomatis karena duplikat / tidak sesuai:
+                  Peringatan: {alreadyTerpakaiItems.length} SN sudah berstatus TERPAKAI sebelumnya.
                 </span>{' '}
                 <span>
-                  Hanya SN yang berstatus valid yang dimasukkan ke Kolom List Siap Import.
+                  Jika Anda ingin mengaktifkan kembali SN tersebut menjadi STOK SIAP, pilih tombol{' '}
+                  <strong>Material Masuk (STOK SIAP)</strong> di atas.
                 </span>
               </div>
             </div>
@@ -173,27 +219,26 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
               </span>
             </div>
 
-            <div className="max-h-[42vh] overflow-y-auto space-y-2 pr-1">
+            <div className="max-h-[38vh] overflow-y-auto space-y-2 pr-1">
               {latestScannedItems.map((item, index) => {
-                const isValid =
-                  item.validationStatus === 'VALID_MASUK' ||
-                  item.validationStatus === 'VALID_KELUAR';
+                const isWarning =
+                  mode === 'KELUAR' && item.validationStatus === 'SUDAH_TERPAKAI';
 
                 return (
                   <div
                     key={`${item.snMaterial}-${index}`}
                     className={`p-3 rounded-xl border flex items-center justify-between gap-2.5 text-xs ${
-                      isValid
-                        ? 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
-                        : 'bg-red-50/60 dark:bg-red-950/25 border-red-200 dark:border-red-800/70'
+                      isWarning
+                        ? 'bg-red-50/60 dark:bg-red-950/25 border-red-200 dark:border-red-800/70'
+                        : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
                     }`}
                   >
                     <div className="flex items-start gap-2.5 min-w-0">
                       <span
                         className={`min-w-[28px] h-7 px-1.5 rounded-lg font-mono text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
-                          isValid
-                            ? 'bg-slate-900 text-white dark:bg-sky-600'
-                            : 'bg-red-600 text-white'
+                          isWarning
+                            ? 'bg-red-600 text-white'
+                            : 'bg-slate-900 text-white dark:bg-sky-600'
                         }`}
                       >
                         #{index + 1}
@@ -209,31 +254,36 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
                           · Batch {item.noBatch} · {item.spesifikasi}
                         </div>
                         <div className="flex items-center gap-1.5 pt-0.5">
-                          {isValid ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                              <span>{item.validationNote}</span>
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] font-mono font-bold ${
+                              isWarning
+                                ? 'text-red-600 dark:text-red-400'
+                                : mode === 'MASUK'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              {mode === 'MASUK'
+                                ? item.rowNumber
+                                  ? `Baris #${item.rowNumber} · Siap Diimport ke MATERIAL_MASUK (STOK SIAP)`
+                                  : 'Baris Baru · Siap Diimport ke MATERIAL_MASUK (STOK SIAP)'
+                                : item.validationNote}
                             </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-mono font-bold text-red-600 dark:text-red-400">
-                              <XOctagon className="w-3.5 h-3.5 shrink-0" />
-                              <span>{item.validationNote}</span>
-                            </span>
-                          )}
+                          </span>
                         </div>
                       </div>
                     </div>
 
-                    {isValid && (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveItem(item.snMaterial)}
-                        className="min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-400 hover:text-red-600 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shrink-0"
-                        title="Hapus SN ini dari Kolom List Siap Import"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveItem(item.snMaterial)}
+                      className="min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-400 hover:text-red-600 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shrink-0"
+                      title="Hapus SN ini dari Kolom List Siap Import"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 );
               })}
@@ -241,14 +291,41 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="p-4 sm:px-5 sm:py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2">
+        {/* Footer Actions — Primary Import Button Always Active & Prominent */}
+        <div className="p-4 sm:px-5 sm:py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900 space-y-2.5">
+          <button
+            type="button"
+            disabled={isImporting}
+            onClick={() => onImportNow(mode)}
+            className={`w-full min-h-[48px] px-5 py-3 text-xs sm:text-sm font-bold text-white rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm ${
+              mode === 'MASUK'
+                ? 'bg-emerald-600 hover:bg-emerald-700'
+                : 'bg-amber-600 hover:bg-amber-700'
+            } disabled:opacity-50`}
+          >
+            {isImporting ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+                <span>Mengimport Data ke Spreadsheet...</span>
+              </>
+            ) : (
+              <>
+                <FileSpreadsheet className="w-5 h-5 shrink-0" />
+                <span>
+                  {mode === 'MASUK'
+                    ? `Import Sekarang (${importCount} SN) ke MATERIAL_MASUK — Status: STOK SIAP`
+                    : `Import Sekarang (${importCount} SN) Keluar — Status: TERPAKAI & MIMS`}
+                </span>
+              </>
+            )}
+          </button>
+
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               disabled={isImporting}
               onClick={onScanMoreCamera}
-              className="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+              className="min-h-[42px] px-3.5 py-2 text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
             >
               <Camera className="w-4 h-4 shrink-0" />
               <span>Scan QR Lagi</span>
@@ -258,40 +335,11 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
               type="button"
               disabled={isImporting}
               onClick={onClose}
-              className="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 rounded-xl transition-colors whitespace-nowrap"
+              className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 rounded-xl transition-colors whitespace-nowrap"
             >
-              Lihat Kolom List ({totalReadyInColumn})
+              Lihat Kolom List ({importCount} SN)
             </button>
           </div>
-
-          {totalReadyInColumn > 0 && (
-            <button
-              type="button"
-              disabled={isImporting}
-              onClick={onImportNow}
-              className={`min-h-[46px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white rounded-xl transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
-                mode === 'MASUK'
-                  ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : 'bg-amber-600 hover:bg-amber-700'
-              } disabled:opacity-50`}
-            >
-              {isImporting ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-                  <span>Mengimport ke Spreadsheet...</span>
-                </>
-              ) : (
-                <>
-                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                  <span>
-                    {mode === 'MASUK'
-                      ? `Import ${totalReadyInColumn} SN ke MATERIAL_MASUK (STOK SIAP)`
-                      : `Import ${totalReadyInColumn} SN Keluar (Status: TERPAKAI)`}
-                  </span>
-                </>
-              )}
-            </button>
-          )}
         </div>
       </div>
     </div>

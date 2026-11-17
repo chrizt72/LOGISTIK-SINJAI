@@ -46,6 +46,10 @@ import {
   ScannedSnItemPreview,
 } from './components/QrScannedListPopup';
 import {
+  ImportFeedbackModal,
+  ImportFeedbackState,
+} from './components/ImportFeedbackModal';
+import {
   AlertNotificationModal,
   SystemAlertState,
 } from './components/AlertNotificationModal';
@@ -64,6 +68,7 @@ import {
   getAccessToken,
   logoutGoogle,
   SpreadsheetMetadata,
+  extractSpreadsheetId,
   readMaterialRowsFromGoogleSheet,
   createNewWarehouseGoogleSheet,
   overwriteGoogleSheetRows,
@@ -88,6 +93,9 @@ interface ReadyInboundItem {
 interface ReadyOutboundItem extends MaterialRow {
   qrType: 'TUNGGAL' | 'BUNDLE';
 }
+
+const CONNECTED_SHEET_STORAGE_KEY = 'simlog_sinjai_connected_sheet_v1';
+const SELECTED_TAB_STORAGE_KEY = 'simlog_sinjai_selected_tab_v1';
 
 export default function App() {
   const [rows, setRows] = useState<MaterialRow[]>([]);
@@ -116,6 +124,7 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [showMobileMetaForm, setShowMobileMetaForm] = useState<boolean>(false);
   const [systemAlert, setSystemAlert] = useState<SystemAlertState | null>(null);
+  const [importFeedback, setImportFeedback] = useState<ImportFeedbackState | null>(null);
   const [inlineBanner, setInlineBanner] = useState<{
     type: 'error' | 'warning' | 'success';
     title: string;
@@ -142,10 +151,45 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [authDomainError, setAuthDomainError] = useState<string | null>(null);
-  const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(null);
-  const [selectedSheetTab, setSelectedSheetTab] = useState<string>('MATERIAL_MASUK');
+  const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(() => {
+    try {
+      const saved = localStorage.getItem(CONNECTED_SHEET_STORAGE_KEY);
+      return saved ? (JSON.parse(saved) as SpreadsheetMetadata) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [selectedSheetTab, setSelectedSheetTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem(SELECTED_TAB_STORAGE_KEY) || 'MATERIAL_MASUK';
+    } catch {
+      return 'MATERIAL_MASUK';
+    }
+  });
   const [pendingSheetsMutation, setPendingSheetsMutation] =
     useState<PendingSheetsMutation | null>(null);
+
+  useEffect(() => {
+    try {
+      if (connectedSheet) {
+        localStorage.setItem(CONNECTED_SHEET_STORAGE_KEY, JSON.stringify(connectedSheet));
+      } else {
+        localStorage.removeItem(CONNECTED_SHEET_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [connectedSheet]);
+
+  useEffect(() => {
+    try {
+      if (selectedSheetTab) {
+        localStorage.setItem(SELECTED_TAB_STORAGE_KEY, selectedSheetTab);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [selectedSheetTab]);
 
   // Officer & Document info
   const [petugas, setPetugas] = useState<string>('Petugas Gudang ULP Sinjai');
@@ -484,77 +528,161 @@ export default function App() {
     });
   };
 
-  const promptInboundGoogleSheetsSync = useCallback(
-    (addedRows: MaterialRow[]) => {
-      if (!connectedSheet || !accessToken || needsAuth || addedRows.length === 0) return;
-      setPendingSheetsMutation({
-        type: 'APPEND_INBOUND',
-        title: `Tambahkan ${addedRows.length} Baris ke Sheet "MATERIAL_MASUK"?`,
-        description: `Apakah Anda ingin menambahkan ${addedRows.length} baris baru hasil scan QR Material Masuk melanjutkan baris pada Google Spreadsheet "${connectedSheet.title}" (Tab: ${selectedSheetTab}) dengan status "STOK SIAP"?`,
-        spreadsheetTitle: connectedSheet.title,
-        sheetTabName: selectedSheetTab,
-        affectedRows: addedRows,
-        totalCount: addedRows.length,
-        onConfirm: async () => {
-          const token = await getAccessToken();
-          if (!token) {
-            setNeedsAuth(true);
-            setPendingSheetsMutation(null);
-            return;
-          }
-          await appendInboundRowsToGoogleSheet(
-            token,
-            connectedSheet.spreadsheetId,
-            selectedSheetTab,
-            addedRows
-          );
-          setPendingSheetsMutation(null);
-          setInlineBanner({
-            type: 'success',
-            title: 'Baris Material Masuk Ditambahkan ke Google Sheets!',
-            message: `${addedRows.length} baris baru berhasil ditambahkan ke "${connectedSheet.title}" (${selectedSheetTab}) dengan status = STOK SIAP.`,
-          });
-        },
-      });
+  const syncInboundToGoogleSheetsDirect = useCallback(
+    async (addedRows: MaterialRow[]) => {
+      if (addedRows.length === 0) return;
+      const token = (await getAccessToken()) || accessToken;
+      const targetSpreadsheetId =
+        connectedSheet?.spreadsheetId || extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+      const targetTitle =
+        connectedSheet?.title || sheetConfig.spreadsheetName || 'LOGISTIK_SINJAI';
+      const targetUrl =
+        connectedSheet?.spreadsheetUrl ||
+        sheetConfig.googleSheetUrl ||
+        (targetSpreadsheetId
+          ? `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
+          : '');
+
+      if (!token || needsAuth || !targetSpreadsheetId) {
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'NOT_CONNECTED',
+              }
+            : null
+        );
+        return;
+      }
+
+      setImportFeedback((prev) =>
+        prev
+          ? {
+              ...prev,
+              googleSheetSyncStatus: 'SYNCING',
+              googleSheetTitle: targetTitle,
+              googleSheetTab: selectedSheetTab || 'MATERIAL_MASUK',
+              googleSheetUrl: targetUrl,
+            }
+          : null
+      );
+
+      try {
+        const usedTab = await appendInboundRowsToGoogleSheet(
+          token,
+          targetSpreadsheetId,
+          selectedSheetTab || 'MATERIAL_MASUK',
+          addedRows
+        );
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'SYNCED',
+                googleSheetTitle: targetTitle,
+                googleSheetTab: usedTab,
+                googleSheetUrl: targetUrl,
+              }
+            : null
+        );
+        setInlineBanner({
+          type: 'success',
+          title: `Tersimpan Otomatis ke Google Sheets (${targetTitle})!`,
+          message: `${addedRows.length} baris Material Masuk berhasil ditambahkan ke Tab "${usedTab}" dengan status STOK SIAP.`,
+        });
+      } catch (err: any) {
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'ERROR',
+                googleSheetError:
+                  err?.message || 'Gagal menulis baris ke Google Spreadsheet.',
+              }
+            : null
+        );
+      }
     },
-    [connectedSheet, accessToken, needsAuth, selectedSheetTab]
+    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig]
   );
 
-  const promptOutboundGoogleSheetsSync = useCallback(
-    (updatedRows: MaterialRow[], addedMims: EksekusiMimsRow[] = []) => {
-      if (!connectedSheet || !accessToken || needsAuth || updatedRows.length === 0) return;
-      setPendingSheetsMutation({
-        type: 'UPDATE_OUTBOUND',
-        title: `Ubah Status Menjadi "TERPAKAI" pada Sheet "${selectedSheetTab}"?`,
-        description: `Konfirmasi: Mengubah status ${updatedRows.length} baris dari "STOK SIAP" menjadi "TERPAKAI" pada Sheet "${selectedSheetTab}" dan mencatatnya pada Material Keluar di Google Spreadsheet "${connectedSheet.title}".`,
-        spreadsheetTitle: connectedSheet.title,
-        sheetTabName: selectedSheetTab,
-        affectedRows: updatedRows,
-        totalCount: updatedRows.length,
-        onConfirm: async () => {
-          const token = await getAccessToken();
-          if (!token) {
-            setNeedsAuth(true);
-            setPendingSheetsMutation(null);
-            return;
-          }
-          await updateOutboundStatusInGoogleSheet(
-            token,
-            connectedSheet.spreadsheetId,
-            selectedSheetTab,
-            updatedRows,
-            addedMims
-          );
-          setPendingSheetsMutation(null);
-          setInlineBanner({
-            type: 'success',
-            title: 'Status Google Sheets Diperbarui Menjadi TERPAKAI!',
-            message: `${updatedRows.length} baris diubah dari STOK SIAP menjadi TERPAKAI pada Sheet "${selectedSheetTab}".`,
-          });
-        },
-      });
+  const syncOutboundToGoogleSheetsDirect = useCallback(
+    async (updatedRows: MaterialRow[], addedMims: EksekusiMimsRow[] = []) => {
+      if (updatedRows.length === 0) return;
+      const token = (await getAccessToken()) || accessToken;
+      const targetSpreadsheetId =
+        connectedSheet?.spreadsheetId || extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+      const targetTitle =
+        connectedSheet?.title || sheetConfig.spreadsheetName || 'LOGISTIK_SINJAI';
+      const targetUrl =
+        connectedSheet?.spreadsheetUrl ||
+        sheetConfig.googleSheetUrl ||
+        (targetSpreadsheetId
+          ? `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
+          : '');
+
+      if (!token || needsAuth || !targetSpreadsheetId) {
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'NOT_CONNECTED',
+              }
+            : null
+        );
+        return;
+      }
+
+      setImportFeedback((prev) =>
+        prev
+          ? {
+              ...prev,
+              googleSheetSyncStatus: 'SYNCING',
+              googleSheetTitle: targetTitle,
+              googleSheetTab: selectedSheetTab || 'MATERIAL_MASUK',
+              googleSheetUrl: targetUrl,
+            }
+          : null
+      );
+
+      try {
+        const usedTab = await updateOutboundStatusInGoogleSheet(
+          token,
+          targetSpreadsheetId,
+          selectedSheetTab || 'MATERIAL_MASUK',
+          updatedRows,
+          addedMims
+        );
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'SYNCED',
+                googleSheetTitle: targetTitle,
+                googleSheetTab: usedTab,
+                googleSheetUrl: targetUrl,
+              }
+            : null
+        );
+        setInlineBanner({
+          type: 'success',
+          title: `Status Google Sheets Diperbarui Menjadi TERPAKAI!`,
+          message: `${updatedRows.length} baris diubah menjadi TERPAKAI pada Tab "${usedTab}" & tercatat di Tab "EKSEKUSI_MIMS".`,
+        });
+      } catch (err: any) {
+        setImportFeedback((prev) =>
+          prev
+            ? {
+                ...prev,
+                googleSheetSyncStatus: 'ERROR',
+                googleSheetError:
+                  err?.message || 'Gagal memperbarui status di Google Spreadsheet.',
+              }
+            : null
+        );
+      }
     },
-    [connectedSheet, accessToken, needsAuth, selectedSheetTab]
+    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig]
   );
 
   const triggerSound = useCallback(
@@ -595,18 +723,48 @@ export default function App() {
         if (!cleanSn) continue;
 
         const matchedRow = existingMap.get(cleanSn);
+        const detectedCat = detectCatalogForSn(cleanSn);
 
         if (!matchedRow) {
+          // Jika SN belum ada di MATERIAL_MASUK awal, tetap masukkan ke Kolom List Siap Import
+          // sehingga saat diimport otomatis tercatat di MATERIAL_MASUK & EKSEKUSI_MIMS (TERPAKAI)
+          const syntheticRow: MaterialRow = {
+            rowNumber: rows.length + newReadyToAdd.length + 2,
+            tanggalHistory: new Date().toISOString().slice(0, 19).replace('T', ' '),
+            snMaterial: cleanSn,
+            noMaterial: detectedCat.noMaterial,
+            spesifikasi: detectedCat.spesifikasi,
+            statusTransaksi: 'STOK SIAP ULP',
+            kategori: detectedCat.kategori,
+            noBatch: detectedCat.defaultBatch,
+            valuationType: detectedCat.valuationType,
+            plant: detectedCat.plant,
+            storLoc: detectedCat.storLoc,
+            companyCode: detectedCat.companyCode,
+            unitInduk: detectedCat.unitInduk,
+            unit: detectedCat.unit,
+            storLocName: detectedCat.storLocName,
+            status: 'STOK SIAP',
+          };
+
           popupItems.push({
             snMaterial: cleanSn,
-            noMaterial: '-',
-            spesifikasi: 'Tidak terdaftar di Sheet MATERIAL_MASUK',
-            kategori: 'kWh Meter',
-            noBatch: '-',
+            noMaterial: detectedCat.noMaterial,
+            spesifikasi: detectedCat.spesifikasi,
+            kategori: detectedCat.kategori,
+            noBatch: detectedCat.defaultBatch,
             qrType,
-            validationStatus: 'TIDAK_DITEMUKAN',
-            validationNote: 'TIDAK DITEMUKAN DI MATERIAL_MASUK',
+            validationStatus: 'VALID_KELUAR',
+            validationNote: 'Siap Import ke Spreadsheet (Status: TERPAKAI & EKSEKUSI_MIMS)',
           });
+
+          if (!alreadyInReadySet.has(cleanSn)) {
+            alreadyInReadySet.add(cleanSn);
+            newReadyToAdd.push({
+              ...syntheticRow,
+              qrType,
+            });
+          }
           continue;
         }
 
@@ -621,21 +779,6 @@ export default function App() {
             rowNumber: matchedRow.rowNumber,
             validationStatus: 'SUDAH_TERPAKAI',
             validationNote: `SUDAH TERPAKAI (Baris #${matchedRow.rowNumber})`,
-          });
-          continue;
-        }
-
-        if (expectedOutboundMat !== 'ALL' && matchedRow.noMaterial !== expectedOutboundMat) {
-          popupItems.push({
-            snMaterial: cleanSn,
-            noMaterial: matchedRow.noMaterial,
-            spesifikasi: matchedRow.spesifikasi,
-            kategori: matchedRow.kategori,
-            noBatch: matchedRow.noBatch,
-            qrType,
-            rowNumber: matchedRow.rowNumber,
-            validationStatus: 'TIDAK_DITEMUKAN',
-            validationNote: `Beda No. Material (${matchedRow.noMaterial} ≠ ${expectedOutboundMat})`,
           });
           continue;
         }
@@ -669,7 +812,7 @@ export default function App() {
           title: `${newReadyToAdd.length} SN (${
             qrType === 'BUNDLE' ? 'QR Bundle' : 'QR Tunggal'
           }) Masuk ke Kolom List Siap Import Spreadsheet`,
-          message: `Deretan SN telah divalidasi terhadap Sheet "MATERIAL_MASUK" (Status: STOK SIAP) dan siap diimport menjadi "TERPAKAI".`,
+          message: `Klik tombol "Import ke Spreadsheet" untuk memperbarui status menjadi "TERPAKAI" dan mencatat ke "EKSEKUSI_MIMS".`,
         });
       } else {
         triggerSound('error');
@@ -683,68 +826,8 @@ export default function App() {
         items: popupItems,
       });
     },
-    [rows, outboundReadyList, expectedOutboundMat, triggerSound]
+    [rows, outboundReadyList, detectCatalogForSn, triggerSound]
   );
-
-  const handleImportOutboundReadyList = async () => {
-    if (outboundReadyList.length === 0) return;
-    setIsProcessingOutbound(true);
-
-    try {
-      const res = await fetch('/api/scan/outbound', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          snList: outboundReadyList.map((r) => r.snMaterial),
-          expectedNoMaterial: expectedOutboundMat,
-          petugas,
-          noDokumen,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.logs) setLogs(data.logs);
-
-      if (!res.ok || !data.success) {
-        triggerSound('error');
-        setInlineBanner({
-          type: 'error',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
-        });
-        setSystemAlert({
-          isOpen: true,
-          severity: 'error-duplicate',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
-        });
-        return;
-      }
-
-      triggerSound('commit');
-      setRows(data.rows || []);
-      if (Array.isArray(data.eksekusiMimsRows)) {
-        setEksekusiMimsRows(data.eksekusiMimsRows);
-      }
-      setOutboundReadyList([]);
-      setQrPopupState((prev) => ({ ...prev, isOpen: false }));
-
-      setInlineBanner({
-        type: 'success',
-        title: `Berhasil Import ${data.updatedCount} SN Material Keluar (STOK SIAP → TERPAKAI)`,
-        message: data.message,
-      });
-
-      if (Array.isArray(data.updatedRows) && data.updatedRows.length > 0) {
-        promptOutboundGoogleSheetsSync(data.updatedRows, data.addedMimsRows || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsProcessingOutbound(false);
-    }
-  };
 
   // ============================================================================
   // 2. HANDLER SCAN QR CODE (TUNGGAL 1 SN ATAU BUNDLE 1-20 SN) — MATERIAL MASUK
@@ -777,40 +860,28 @@ export default function App() {
         const detectedCat = detectCatalogForSn(cleanSn);
         const batchToUse = inboundBatchNo || detectedCat.defaultBatch || '15';
 
-        if (existingRow) {
-          popupItems.push({
-            snMaterial: cleanSn,
-            noMaterial: existingRow.noMaterial,
-            spesifikasi: existingRow.spesifikasi,
-            kategori: existingRow.kategori,
-            noBatch: existingRow.noBatch,
-            qrType,
-            rowNumber: existingRow.rowNumber,
-            validationStatus: 'DUPLIKAT_SHEET',
-            validationNote: `SUDAH TERDAFTAR DI MATERIAL_MASUK (Baris #${existingRow.rowNumber} · ${existingRow.status})`,
-          });
-          continue;
-        }
-
         popupItems.push({
           snMaterial: cleanSn,
-          noMaterial: detectedCat.noMaterial,
-          spesifikasi: detectedCat.spesifikasi,
-          kategori: detectedCat.kategori,
-          noBatch: batchToUse,
+          noMaterial: existingRow ? existingRow.noMaterial : detectedCat.noMaterial,
+          spesifikasi: existingRow ? existingRow.spesifikasi : detectedCat.spesifikasi,
+          kategori: existingRow ? existingRow.kategori : detectedCat.kategori,
+          noBatch: existingRow ? existingRow.noBatch : batchToUse,
           qrType,
+          rowNumber: existingRow?.rowNumber,
           validationStatus: 'VALID_MASUK',
-          validationNote: 'SIAP IMPORT KE MATERIAL_MASUK (STATUS: STOK SIAP)',
+          validationNote: existingRow
+            ? `Baris #${existingRow.rowNumber} · Siap Diimport ke MATERIAL_MASUK (STATUS: STOK SIAP)`
+            : 'Baris Baru · Siap Diimport ke MATERIAL_MASUK (STATUS: STOK SIAP)',
         });
 
         if (!alreadyInReadySet.has(cleanSn)) {
           alreadyInReadySet.add(cleanSn);
           newReadyToAdd.push({
             snMaterial: cleanSn,
-            noMaterial: detectedCat.noMaterial,
-            spesifikasi: detectedCat.spesifikasi,
-            kategori: detectedCat.kategori,
-            noBatch: batchToUse,
+            noMaterial: existingRow ? existingRow.noMaterial : detectedCat.noMaterial,
+            spesifikasi: existingRow ? existingRow.spesifikasi : detectedCat.spesifikasi,
+            kategori: existingRow ? existingRow.kategori : detectedCat.kategori,
+            noBatch: existingRow ? existingRow.noBatch : batchToUse,
             qrType,
           });
         }
@@ -824,10 +895,10 @@ export default function App() {
           title: `${newReadyToAdd.length} SN (${
             qrType === 'BUNDLE' ? 'QR Bundle' : 'QR Tunggal'
           }) Masuk ke Kolom List Siap Import Spreadsheet`,
-          message: `Deretan SN siap diimport melanjutkan baris pada Sheet "MATERIAL_MASUK" dengan status keterangan = "STOK SIAP".`,
+          message: `Klik tombol "Import ke MATERIAL_MASUK" untuk menyimpan deretan SN dengan status keterangan = "STOK SIAP".`,
         });
       } else {
-        triggerSound('error');
+        triggerSound('scan');
       }
 
       // Munculkan Popup Otomatis Deretan SN yang Terscan
@@ -841,17 +912,228 @@ export default function App() {
     [rows, inboundReadyList, detectCatalogForSn, inboundBatchNo, triggerSound]
   );
 
+  // Switch Mode inside QrScannedListPopup (MASUK <-> KELUAR)
+  const handleSwitchPopupMode = useCallback(
+    (newMode: 'MASUK' | 'KELUAR') => {
+      setQrPopupState((prev) => ({
+        ...prev,
+        mode: newMode,
+      }));
+      setActiveSection(newMode === 'MASUK' ? 'masuk' : 'keluar');
+
+      const currentPopupItems = qrPopupState.items;
+      if (newMode === 'MASUK') {
+        const existingReadySns = new Set(
+          inboundReadyList.map((i) => i.snMaterial.toUpperCase())
+        );
+        const toAdd: ReadyInboundItem[] = [];
+        for (const item of currentPopupItems) {
+          const clean = item.snMaterial.toUpperCase();
+          if (!existingReadySns.has(clean)) {
+            existingReadySns.add(clean);
+            toAdd.push({
+              snMaterial: clean,
+              noMaterial: item.noMaterial !== '-' ? item.noMaterial : selectedInboundMat,
+              spesifikasi: item.spesifikasi,
+              kategori: item.kategori,
+              noBatch: item.noBatch !== '-' ? item.noBatch : inboundBatchNo,
+              qrType: item.qrType,
+            });
+          }
+        }
+        if (toAdd.length > 0) {
+          setInboundReadyList((prev) => [...prev, ...toAdd]);
+        }
+      } else {
+        const existingReadySns = new Set(
+          outboundReadyList.map((i) => i.snMaterial.toUpperCase())
+        );
+        const existingMap = new Map<string, MaterialRow>();
+        for (const r of rows) {
+          existingMap.set(r.snMaterial.toUpperCase(), r);
+        }
+        const toAdd: ReadyOutboundItem[] = [];
+        for (const item of currentPopupItems) {
+          const clean = item.snMaterial.toUpperCase();
+          if (!existingReadySns.has(clean)) {
+            existingReadySns.add(clean);
+            const matched = existingMap.get(clean);
+            const cat = detectCatalogForSn(clean);
+            toAdd.push({
+              rowNumber: matched?.rowNumber || rows.length + toAdd.length + 2,
+              tanggalHistory:
+                matched?.tanggalHistory ||
+                new Date().toISOString().slice(0, 19).replace('T', ' '),
+              snMaterial: clean,
+              noMaterial: matched?.noMaterial || cat.noMaterial,
+              spesifikasi: matched?.spesifikasi || cat.spesifikasi,
+              statusTransaksi: matched?.statusTransaksi || 'STOK SIAP ULP',
+              kategori: matched?.kategori || cat.kategori,
+              noBatch: matched?.noBatch || cat.defaultBatch,
+              valuationType: matched?.valuationType || cat.valuationType,
+              plant: matched?.plant || cat.plant,
+              storLoc: matched?.storLoc || cat.storLoc,
+              companyCode: matched?.companyCode || cat.companyCode,
+              unitInduk: matched?.unitInduk || cat.unitInduk,
+              unit: matched?.unit || cat.unit,
+              storLocName: matched?.storLocName || cat.storLocName,
+              status: matched?.status || 'STOK SIAP',
+              qrType: item.qrType,
+            });
+          }
+        }
+        if (toAdd.length > 0) {
+          setOutboundReadyList((prev) => [...prev, ...toAdd]);
+        }
+      }
+    },
+    [
+      qrPopupState.items,
+      inboundReadyList,
+      outboundReadyList,
+      rows,
+      selectedInboundMat,
+      inboundBatchNo,
+      detectCatalogForSn,
+    ]
+  );
+
+  const handleImportOutboundReadyList = async () => {
+    // Gunakan daftar outboundReadyList atau fallback dari qrPopupState.items agar tidak pernah kosong
+    const snListToImport =
+      outboundReadyList.length > 0
+        ? outboundReadyList.map((r) => r.snMaterial)
+        : qrPopupState.items.map((i) => i.snMaterial);
+
+    if (snListToImport.length === 0) {
+      triggerSound('error');
+      setInlineBanner({
+        type: 'warning',
+        title: 'Daftar Siap Import Masih Kosong',
+        message: 'Silakan scan QR Code terlebih dahulu sebelum menekan tombol Import.',
+      });
+      return;
+    }
+
+    setIsProcessingOutbound(true);
+
+    try {
+      const res = await fetch('/api/scan/outbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          snList: snListToImport,
+          expectedNoMaterial: 'ALL',
+          petugas,
+          noDokumen,
+          autoRegisterMissing: true,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.stats) setStats(data.stats);
+      if (data.logs) setLogs(data.logs);
+
+      if (!res.ok || !data.success) {
+        triggerSound('error');
+        setInlineBanner({
+          type: 'error',
+          title: data.title || 'Peringatan Error Pengeluaran Material',
+          message: data.message,
+        });
+        setSystemAlert({
+          isOpen: true,
+          severity: 'error-duplicate',
+          title: data.title || 'Peringatan Error Pengeluaran Material',
+          message: data.message,
+        });
+        return;
+      }
+
+      triggerSound('commit');
+      setRows(data.rows || []);
+      if (Array.isArray(data.eksekusiMimsRows)) {
+        setEksekusiMimsRows(data.eksekusiMimsRows);
+      }
+      setOutboundReadyList([]);
+      setQrPopupState((prev) => ({ ...prev, isOpen: false }));
+      setCurrentPage(1);
+
+      const importedList: MaterialRow[] = Array.isArray(data.updatedRows)
+        ? data.updatedRows
+        : [];
+      const mimsAdded: EksekusiMimsRow[] = Array.isArray(data.addedMimsRows)
+        ? data.addedMimsRows
+        : [];
+
+      setInlineBanner({
+        type: 'success',
+        title: `Berhasil Import ${importedList.length} SN Material Keluar (Status: TERPAKAI)!`,
+        message: data.message,
+      });
+
+      // Tampilkan Modal Feedback Hasil Import Spreadsheet secara langsung
+      setImportFeedback({
+        isOpen: true,
+        mode: 'KELUAR',
+        importedRows: importedList,
+        mimsRows: mimsAdded,
+        timestamp:
+          importedList[0]?.tanggalHistory ||
+          new Date().toISOString().slice(0, 19).replace('T', ' '),
+        message: data.message,
+        googleSheetSyncStatus: 'IDLE',
+      });
+
+      if (importedList.length > 0) {
+        await syncOutboundToGoogleSheetsDirect(importedList, mimsAdded);
+      }
+    } catch (err: any) {
+      console.error(err);
+      triggerSound('error');
+      setInlineBanner({
+        type: 'error',
+        title: 'Gagal Mengimport Data Material Keluar',
+        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan ke server.',
+      });
+    } finally {
+      setIsProcessingOutbound(false);
+    }
+  };
+
   const handleImportInboundReadyList = async () => {
-    if (inboundReadyList.length === 0) return;
+    const itemsToImport: ReadyInboundItem[] =
+      inboundReadyList.length > 0
+        ? inboundReadyList
+        : qrPopupState.items.map((i) => ({
+            snMaterial: i.snMaterial,
+            noMaterial: i.noMaterial !== '-' ? i.noMaterial : selectedInboundMat,
+            spesifikasi: i.spesifikasi,
+            kategori: i.kategori,
+            noBatch: i.noBatch !== '-' ? i.noBatch : inboundBatchNo,
+            qrType: i.qrType,
+          }));
+
+    if (itemsToImport.length === 0) {
+      triggerSound('error');
+      setInlineBanner({
+        type: 'warning',
+        title: 'Daftar Siap Import Masih Kosong',
+        message: 'Silakan scan QR Code terlebih dahulu sebelum menekan tombol Import.',
+      });
+      return;
+    }
+
     setIsProcessingInbound(true);
     try {
       const res = await fetch('/api/scan/inbound', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: inboundReadyList,
+          items: itemsToImport,
           petugas,
           noDokumen,
+          allowExistingUpdate: true,
         }),
       });
       const data = await res.json();
@@ -874,18 +1156,39 @@ export default function App() {
       setRows(data.rows || []);
       setInboundReadyList([]);
       setQrPopupState((prev) => ({ ...prev, isOpen: false }));
+      setCurrentPage(1);
+
+      const addedList: MaterialRow[] = Array.isArray(data.addedRows) ? data.addedRows : [];
 
       setInlineBanner({
         type: 'success',
-        title: `Berhasil Import ${data.addedCount} Baris Baru ke Sheet "MATERIAL_MASUK" (STOK SIAP)!`,
+        title: `Berhasil Import ${addedList.length} SN ke Sheet "MATERIAL_MASUK" (STOK SIAP)!`,
         message: data.message,
       });
 
-      if (Array.isArray(data.addedRows) && data.addedRows.length > 0) {
-        promptInboundGoogleSheetsSync(data.addedRows);
+      // Tampilkan Modal Feedback Hasil Import Spreadsheet secara langsung
+      setImportFeedback({
+        isOpen: true,
+        mode: 'MASUK',
+        importedRows: addedList,
+        timestamp:
+          addedList[0]?.tanggalHistory ||
+          new Date().toISOString().slice(0, 19).replace('T', ' '),
+        message: data.message,
+        googleSheetSyncStatus: 'IDLE',
+      });
+
+      if (addedList.length > 0) {
+        await syncInboundToGoogleSheetsDirect(addedList);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      triggerSound('error');
+      setInlineBanner({
+        type: 'error',
+        title: 'Gagal Mengimport Data Material Masuk',
+        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan ke server.',
+      });
     } finally {
       setIsProcessingInbound(false);
     }
@@ -920,10 +1223,12 @@ export default function App() {
 
   // ============================================================================
   // 3. FILTERED SPREADSHEET ROWS & PAGINATION
+  // Mengurutkan baris yang baru diimport/diupdate (MASUK / KELUAR) di urutan
+  // paling atas Halaman 1 agar langsung terlihat begitu tombol Import ditekan!
   // ============================================================================
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toUpperCase();
-    return rows.filter((r) => {
+    const matching = rows.filter((r) => {
       if (statusFilter === 'STOK SIAP' && r.status !== 'STOK SIAP') return false;
       if (statusFilter === 'TERPAKAI' && r.status !== 'TERPAKAI') return false;
       if (statusFilter === 'BARU_MASUK' && r.lastScanType !== 'MASUK') return false;
@@ -936,6 +1241,22 @@ export default function App() {
         r.noBatch.toUpperCase().includes(q) ||
         String(r.rowNumber).includes(q)
       );
+    });
+
+    // Tampilkan baris yang baru di-scan/diimport (MASUK / KELUAR) di bagian paling atas
+    return matching.slice().sort((a, b) => {
+      const aScanned = a.lastScanType === 'MASUK' || a.lastScanType === 'KELUAR' ? 1 : 0;
+      const bScanned = b.lastScanType === 'MASUK' || b.lastScanType === 'KELUAR' ? 1 : 0;
+      if (aScanned !== bScanned) {
+        return bScanned - aScanned;
+      }
+      if (aScanned && bScanned) {
+        const timeA = a.lastScannedAt || a.tanggalHistory || '';
+        const timeB = b.lastScannedAt || b.tanggalHistory || '';
+        if (timeA !== timeB) return timeB.localeCompare(timeA);
+        return b.rowNumber - a.rowNumber;
+      }
+      return a.rowNumber - b.rowNumber;
     });
   }, [rows, searchQuery, statusFilter, materialFilter]);
 
@@ -2583,15 +2904,22 @@ export default function App() {
                               <span className="text-slate-500 dark:text-slate-400 tabular-nums">
                                 Baris #{row.rowNumber} · {row.tanggalHistory}
                               </span>
-                              <span
-                                className={`font-bold ${
-                                  isTerpakai
-                                    ? 'text-amber-700 dark:text-amber-400'
-                                    : 'text-emerald-700 dark:text-emerald-400'
-                                }`}
-                              >
-                                {row.status}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                {(row.lastScanType === 'MASUK' || row.lastScanType === 'KELUAR') && (
+                                  <span className="px-1.5 py-0.5 rounded bg-sky-600 text-white text-[9px] font-bold uppercase">
+                                    BARU DIIMPORT
+                                  </span>
+                                )}
+                                <span
+                                  className={`font-bold ${
+                                    isTerpakai
+                                      ? 'text-amber-700 dark:text-amber-400'
+                                      : 'text-emerald-700 dark:text-emerald-400'
+                                  }`}
+                                >
+                                  {row.status}
+                                </span>
+                              </div>
                             </div>
 
                             {/* Middle SN & Spec */}
@@ -2677,6 +3005,12 @@ export default function App() {
                                 <td className="py-2 px-2.5 font-mono tabular-nums font-bold text-slate-900 dark:text-white whitespace-nowrap">
                                   <div className="flex items-center gap-1.5">
                                     <span>{row.snMaterial}</span>
+                                    {(row.lastScanType === 'MASUK' ||
+                                      row.lastScanType === 'KELUAR') && (
+                                      <span className="px-1.5 py-0.5 rounded bg-sky-600 text-white text-[9px] font-bold uppercase">
+                                        BARU DIIMPORT
+                                      </span>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() => setPreviewBarcodeRow(row)}
@@ -3101,6 +3435,7 @@ export default function App() {
           qrPopupState.mode === 'MASUK' ? isProcessingInbound : isProcessingOutbound
         }
         onClose={() => setQrPopupState((prev) => ({ ...prev, isOpen: false }))}
+        onSwitchMode={handleSwitchPopupMode}
         onScanMoreCamera={() => {
           setQrPopupState((prev) => ({ ...prev, isOpen: false }));
           setIsCameraOpen(true);
@@ -3120,11 +3455,41 @@ export default function App() {
             items: prev.items.filter((i) => i.snMaterial !== snToRemove),
           }));
         }}
-        onImportNow={async () => {
-          if (qrPopupState.mode === 'MASUK') {
+        onImportNow={async (targetMode) => {
+          if (targetMode === 'MASUK') {
             await handleImportInboundReadyList();
           } else {
             await handleImportOutboundReadyList();
+          }
+        }}
+      />
+
+      <ImportFeedbackModal
+        feedback={importFeedback}
+        onClose={() => setImportFeedback(null)}
+        onViewInSpreadsheetTable={() => {
+          setSearchQuery('');
+          setStatusFilter('ALL');
+          setMaterialFilter('ALL');
+          setCurrentPage(1);
+          setActiveSection('spreadsheet');
+          setActiveSpreadsheetTab('MATERIAL_MASUK');
+        }}
+        onScanAgain={() => {
+          setIsCameraOpen(true);
+        }}
+        onOpenGoogleSyncModal={() => {
+          setIsSyncModalOpen(true);
+        }}
+        onRetryGoogleSheetSync={async () => {
+          if (!importFeedback) return;
+          if (importFeedback.mode === 'MASUK') {
+            await syncInboundToGoogleSheetsDirect(importFeedback.importedRows);
+          } else {
+            await syncOutboundToGoogleSheetsDirect(
+              importFeedback.importedRows,
+              importFeedback.mimsRows || []
+            );
           }
         }}
       />

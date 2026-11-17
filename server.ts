@@ -573,6 +573,7 @@ async function startServer() {
       items = [],
       petugas = 'Petugas Logistik Sinjai',
       noDokumen = '',
+      allowExistingUpdate = true,
     } = req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -587,12 +588,12 @@ async function startServer() {
     const nowStr = formatNowTimestamp();
     const duplicates: { snMaterial: string; rowNumber?: number; status?: string; reason: string }[] = [];
     const seenInBatch = new Set<string>();
+    const validItemsToProcess: typeof items = [];
 
     for (const item of items) {
       const sn = String(item.snMaterial || '').trim().toUpperCase();
       if (!sn) continue;
       if (seenInBatch.has(sn)) {
-        duplicates.push({ snMaterial: sn, reason: 'Duplikat di dalam antrean scan yang sama' });
         continue;
       }
       seenInBatch.add(sn);
@@ -600,17 +601,19 @@ async function startServer() {
       const existing = warehouseState.rows.find(
         (r: MaterialRow) => r.snMaterial.toUpperCase() === sn
       );
-      if (existing) {
+      if (existing && !allowExistingUpdate) {
         duplicates.push({
           snMaterial: sn,
           rowNumber: existing.rowNumber,
           status: existing.status,
           reason: `Sudah terdaftar di Sheet "MATERIAL_MASUK" Baris #${existing.rowNumber} (Status: ${existing.status})`,
         });
+        continue;
       }
+      validItemsToProcess.push(item);
     }
 
-    if (duplicates.length > 0) {
+    if (duplicates.length > 0 && validItemsToProcess.length === 0) {
       warehouseState.counters.duplicateAlertCount += duplicates.length;
       warehouseState.logs.unshift({
         id: `log-${Date.now()}`,
@@ -627,7 +630,7 @@ async function startServer() {
         success: false,
         errorType: 'DUPLICATE_BARCODE',
         title: 'Peringatan Error: QR Code Sudah Pernah Di-scan!',
-        message: `Terdapat ${duplicates.length} Serial Number (SN) yang sudah terdaftar di Sheet "MATERIAL_MASUK". Sistem menolak penambahan baris duplikat.`,
+        message: `Terdapat ${duplicates.length} Serial Number (SN) yang sudah terdaftar di Sheet "MATERIAL_MASUK".`,
         duplicates,
         stats: computeStats(warehouseState),
         logs: warehouseState.logs.slice(0, 150),
@@ -635,51 +638,83 @@ async function startServer() {
     }
 
     const addedRows: MaterialRow[] = [];
-    for (const item of items) {
+    for (const item of validItemsToProcess) {
       const sn = String(item.snMaterial || '').trim().toUpperCase();
       const catalogMatch =
         MATERIAL_CATALOG.find((c) => c.noMaterial === item.noMaterial) ||
         detectMaterialFromSN(sn);
 
-      const newRow: MaterialRow = {
-        rowNumber: warehouseState.rows.length + 2,
-        tanggalHistory: nowStr,
-        snMaterial: sn,
-        noMaterial: item.noMaterial || catalogMatch.noMaterial,
-        spesifikasi: item.spesifikasi || catalogMatch.spesifikasi,
-        statusTransaksi: 'STOK SIAP ULP',
-        kategori: item.kategori || catalogMatch.kategori,
-        noBatch: item.noBatch || catalogMatch.defaultBatch,
-        valuationType: catalogMatch.valuationType,
-        plant: catalogMatch.plant,
-        storLoc: catalogMatch.storLoc,
-        companyCode: catalogMatch.companyCode,
-        unitInduk: catalogMatch.unitInduk,
-        unit: catalogMatch.unit,
-        storLocName: catalogMatch.storLocName,
-        status: 'STOK SIAP',
-        lastScannedAt: nowStr,
-        lastScanType: 'MASUK',
-        petugas,
-        noDokumen,
-      };
+      const existingRow = warehouseState.rows.find(
+        (r: MaterialRow) => r.snMaterial.toUpperCase() === sn
+      );
 
-      warehouseState.rows.push(newRow);
-      addedRows.push(newRow);
+      if (existingRow && allowExistingUpdate) {
+        // Jika SN sudah ada pada data awal namun diimport ulang sebagai Material Masuk,
+        // perbarui statusnya menjadi STOK SIAP dan tandai sebagai MASUK agar tampil di urutan teratas
+        existingRow.tanggalHistory = nowStr;
+        existingRow.status = 'STOK SIAP';
+        existingRow.statusTransaksi = 'STOK SIAP ULP';
+        existingRow.lastScannedAt = nowStr;
+        existingRow.lastScanType = 'MASUK';
+        existingRow.petugas = petugas;
+        existingRow.noDokumen = noDokumen;
+        if (item.noBatch) existingRow.noBatch = item.noBatch;
+        addedRows.push(existingRow);
 
-      warehouseState.logs.unshift({
-        id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        timestamp: nowStr,
-        type: 'MASUK',
-        snMaterial: sn,
-        noMaterial: newRow.noMaterial,
-        spesifikasi: newRow.spesifikasi,
-        statusColO: 'STOK SIAP',
-        rowNumber: newRow.rowNumber,
-        message: `MATERIAL MASUK: Baris baru #${newRow.rowNumber} ditambahkan melanjutkan Sheet "MATERIAL_MASUK" — SN ${sn} (${newRow.noMaterial}) -> Status: STOK SIAP.`,
-        petugas,
-        noDokumen,
-      });
+        warehouseState.logs.unshift({
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          timestamp: nowStr,
+          type: 'MASUK',
+          snMaterial: sn,
+          noMaterial: existingRow.noMaterial,
+          spesifikasi: existingRow.spesifikasi,
+          statusColO: 'STOK SIAP',
+          rowNumber: existingRow.rowNumber,
+          message: `MATERIAL MASUK (IMPORT SPREADSHEET): Baris #${existingRow.rowNumber} pada Sheet "MATERIAL_MASUK" — SN ${sn} (${existingRow.noMaterial}) -> Status: STOK SIAP.`,
+          petugas,
+          noDokumen,
+        });
+      } else {
+        const newRow: MaterialRow = {
+          rowNumber: warehouseState.rows.length + 2,
+          tanggalHistory: nowStr,
+          snMaterial: sn,
+          noMaterial: item.noMaterial || catalogMatch.noMaterial,
+          spesifikasi: item.spesifikasi || catalogMatch.spesifikasi,
+          statusTransaksi: 'STOK SIAP ULP',
+          kategori: item.kategori || catalogMatch.kategori,
+          noBatch: item.noBatch || catalogMatch.defaultBatch,
+          valuationType: catalogMatch.valuationType,
+          plant: catalogMatch.plant,
+          storLoc: catalogMatch.storLoc,
+          companyCode: catalogMatch.companyCode,
+          unitInduk: catalogMatch.unitInduk,
+          unit: catalogMatch.unit,
+          storLocName: catalogMatch.storLocName,
+          status: 'STOK SIAP',
+          lastScannedAt: nowStr,
+          lastScanType: 'MASUK',
+          petugas,
+          noDokumen,
+        };
+
+        warehouseState.rows.push(newRow);
+        addedRows.push(newRow);
+
+        warehouseState.logs.unshift({
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          timestamp: nowStr,
+          type: 'MASUK',
+          snMaterial: sn,
+          noMaterial: newRow.noMaterial,
+          spesifikasi: newRow.spesifikasi,
+          statusColO: 'STOK SIAP',
+          rowNumber: newRow.rowNumber,
+          message: `MATERIAL MASUK: Baris baru #${newRow.rowNumber} ditambahkan melanjutkan Sheet "MATERIAL_MASUK" — SN ${sn} (${newRow.noMaterial}) -> Status: STOK SIAP.`,
+          petugas,
+          noDokumen,
+        });
+      }
     }
 
     warehouseState.counters.inboundAddedCount += addedRows.length;
@@ -692,7 +727,7 @@ async function startServer() {
       rows: warehouseState.rows,
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
-      message: `Berhasil menambahkan ${addedRows.length} baris baru melanjutkan Sheet "MATERIAL_MASUK" dengan keterangan status "STOK SIAP".`,
+      message: `Berhasil mengimport ${addedRows.length} SN ke Sheet "MATERIAL_MASUK" dengan keterangan status "STOK SIAP".`,
     });
   });
 
@@ -703,6 +738,7 @@ async function startServer() {
       expectedNoMaterial = 'ALL',
       petugas = 'Petugas Logistik Sinjai',
       noDokumen = '',
+      autoRegisterMissing = true,
     } = req.body || {};
 
     const nowStr = formatNowTimestamp();
@@ -773,25 +809,49 @@ async function startServer() {
 
     for (const sn of cleanedList) {
       if (seen.has(sn)) {
-        errors.push({
-          snMaterial: sn,
-          errorType: 'DUPLICATE_IN_BATCH',
-          reason: `SN ${sn} di-scan lebih dari 1 kali dalam daftar pengeluaran ini.`,
-        });
         continue;
       }
       seen.add(sn);
 
-      const row = warehouseState.rows.find(
+      let row = warehouseState.rows.find(
         (r: MaterialRow) => r.snMaterial.toUpperCase() === sn
       );
+
       if (!row) {
-        errors.push({
-          snMaterial: sn,
-          errorType: 'NOT_FOUND',
-          reason: `SN ${sn} tidak ditemukan di Sheet "MATERIAL_MASUK".`,
-        });
-        continue;
+        if (autoRegisterMissing) {
+          // Otomatis tambahkan ke MATERIAL_MASUK agar dapat langsung diproses keluar (TERPAKAI)
+          const catalogMatch = detectMaterialFromSN(sn);
+          row = {
+            rowNumber: warehouseState.rows.length + 2,
+            tanggalHistory: nowStr,
+            snMaterial: sn,
+            noMaterial: catalogMatch.noMaterial,
+            spesifikasi: catalogMatch.spesifikasi,
+            statusTransaksi: 'STOK SIAP ULP',
+            kategori: catalogMatch.kategori,
+            noBatch: catalogMatch.defaultBatch,
+            valuationType: catalogMatch.valuationType,
+            plant: catalogMatch.plant,
+            storLoc: catalogMatch.storLoc,
+            companyCode: catalogMatch.companyCode,
+            unitInduk: catalogMatch.unitInduk,
+            unit: catalogMatch.unit,
+            storLocName: catalogMatch.storLocName,
+            status: 'STOK SIAP',
+            lastScannedAt: nowStr,
+            lastScanType: 'KELUAR',
+            petugas,
+            noDokumen,
+          };
+          warehouseState.rows.push(row);
+        } else {
+          errors.push({
+            snMaterial: sn,
+            errorType: 'NOT_FOUND',
+            reason: `SN ${sn} tidak ditemukan di Sheet "MATERIAL_MASUK".`,
+          });
+          continue;
+        }
       }
 
       if (row.status === 'TERPAKAI') {
@@ -817,7 +877,7 @@ async function startServer() {
       targetRows.push(row);
     }
 
-    if (errors.length > 0) {
+    if (errors.length > 0 && targetRows.length === 0) {
       const hasDuplicate = errors.some(
         (e) => e.errorType === 'DUPLICATE_IN_BATCH' || e.errorType === 'ALREADY_USED'
       );
@@ -900,7 +960,7 @@ async function startServer() {
         statusColO: 'TERPAKAI',
         rowNumber: row.rowNumber,
         mimsRowNumber: newMimsRow.mimsRowNumber,
-        message: `MATERIAL KELUAR: Baris #${row.rowNumber} (SN: ${row.snMaterial}) pada Sheet "MATERIAL_MASUK" masih berstatus STOK SIAP -> proses dilanjutkan dan status berubah menjadi "TERPAKAI".`,
+        message: `MATERIAL KELUAR: Baris #${row.rowNumber} (SN: ${row.snMaterial}) pada Sheet "MATERIAL_MASUK" diubah menjadi "TERPAKAI" dan masuk ke Sheet "EKSEKUSI_MIMS".`,
         petugas,
         noDokumen,
       });
@@ -918,7 +978,7 @@ async function startServer() {
       eksekusiMimsRows: warehouseState.eksekusiMimsRows,
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
-      message: `Berhasil memproses pengeluaran ${updatedRows.length} unit material. Status pada Sheet "MATERIAL_MASUK" berubah dari "STOK SIAP" menjadi "TERPAKAI".`,
+      message: `Berhasil mengimport pengeluaran ${updatedRows.length} unit material. Status pada Sheet "MATERIAL_MASUK" berubah dari "STOK SIAP" menjadi "TERPAKAI" dan tercatat di "EKSEKUSI_MIMS".`,
     });
   });
 
