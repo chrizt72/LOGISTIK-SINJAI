@@ -13,6 +13,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Copy,
+  Check,
+  Smartphone,
+  ShieldAlert,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
@@ -21,6 +25,8 @@ import {
   extractSpreadsheetId,
   listDriveSpreadsheets,
   getSpreadsheetMetadata,
+  FIREBASE_PROJECT_ID,
+  FIREBASE_AUTH_DOMAINS_URL,
 } from '../services/googleWorkspace';
 
 interface SpreadsheetSyncModalProps {
@@ -40,10 +46,12 @@ interface SpreadsheetSyncModalProps {
   accessToken: string | null;
   needsAuth: boolean;
   isSigningIn: boolean;
+  authDomainError?: string | null;
   connectedSheet: SpreadsheetMetadata | null;
   selectedSheetTab: string;
   onSelectSheetTab: (tabTitle: string) => void;
   onGoogleLogin: () => Promise<void>;
+  onDirectGisLogin?: () => Promise<void>;
   onGoogleLogout: () => Promise<void>;
   onConnectSpreadsheet: (meta: SpreadsheetMetadata, tabTitle: string) => void;
   onPullFromGoogleSheet: (
@@ -73,10 +81,12 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
   accessToken,
   needsAuth,
   isSigningIn,
+  authDomainError,
   connectedSheet,
   selectedSheetTab,
   onSelectSheetTab,
   onGoogleLogin,
+  onDirectGisLogin,
   onGoogleLogout,
   onConnectSpreadsheet,
   onPullFromGoogleSheet,
@@ -87,13 +97,35 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
   onResetData,
 }) => {
   const [urlInput, setUrlInput] = useState(sheetConfig.googleSheetUrl || '');
-  const [newSheetTitle, setNewSheetTitle] = useState('LOGISTIK_SINJAI - MATERIAL & EKSEKUSI_MIMS');
+  const [newSheetTitle, setNewSheetTitle] = useState(
+    'LOGISTIK_SINJAI - MATERIAL_MASUK & EKSEKUSI_MIMS'
+  );
   const [driveFiles, setDriveFiles] = useState<DriveSpreadsheetFile[]>([]);
   const [isLoadingDrive, setIsLoadingDrive] = useState(false);
   const [isInspectingSheet, setIsInspectingSheet] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [showDomainHelper, setShowDomainHelper] = useState<boolean>(false);
+  const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
+
+  const currentHostname =
+    typeof window !== 'undefined' ? window.location.hostname : '';
+  const recommendedDomains = Array.from(
+    new Set(
+      [
+        currentHostname,
+        'ais-pre-g4euqkdwgi6vuxxz4t7zwz-898819267110.asia-southeast1.run.app',
+        'ais-dev-g4euqkdwgi6vuxxz4t7zwz-898819267110.asia-southeast1.run.app',
+      ].filter(Boolean)
+    )
+  );
+
+  useEffect(() => {
+    if (authDomainError) {
+      setShowDomainHelper(true);
+    }
+  }, [authDomainError]);
 
   useEffect(() => {
     if (isOpen && accessToken && !needsAuth) {
@@ -116,6 +148,16 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleCopyDomain = async (domain: string) => {
+    try {
+      await navigator.clipboard.writeText(domain);
+      setCopiedDomain(domain);
+      setTimeout(() => setCopiedDomain(null), 2500);
+    } catch {
+      // ignore clipboard error
+    }
+  };
+
   const handleInspectSpreadsheetId = async (idOrUrl: string) => {
     const sheetId = extractSpreadsheetId(idOrUrl);
     if (!sheetId) {
@@ -132,10 +174,14 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
     try {
       const meta = await getSpreadsheetMetadata(accessToken, sheetId);
       const preferredTab =
-        meta.sheets.find((s) => s.title.toUpperCase() === 'MATERIAL')?.title ||
+        meta.sheets.find(
+          (s) =>
+            s.title.toUpperCase() === 'MATERIAL_MASUK' ||
+            s.title.toUpperCase() === 'MATERIAL'
+        )?.title ||
         meta.sheets.find((s) => s.sheetId === 0)?.title ||
         meta.sheets[0]?.title ||
-        'MATERIAL';
+        'MATERIAL_MASUK';
       onConnectSpreadsheet(meta, preferredTab);
       setUrlInput(meta.spreadsheetUrl);
     } catch (err: any) {
@@ -191,7 +237,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
           <div className="flex items-center gap-2.5 min-w-0">
             <FileSpreadsheet className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-              Integrasi Sheet &quot;MATERIAL&quot; &amp; &quot;EKSEKUSI_MIMS&quot;
+              Integrasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;EKSEKUSI_MIMS&quot;
             </h3>
           </div>
           <button
@@ -209,14 +255,14 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
           <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/70 space-y-1.5 text-xs">
             <div className="flex items-center gap-2 font-bold text-amber-950 dark:text-amber-200">
               <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Otomasi 2 Sheet: &quot;MATERIAL&quot; (GID=0) &amp; &quot;EKSEKUSI_MIMS&quot;</span>
+              <span>Sinkronisasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;EKSEKUSI_MIMS&quot;</span>
             </div>
             <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-              Setiap kali <strong>Material Keluar</strong> di-scan, Kolom O pada Sheet{' '}
-              <code className="font-mono font-bold">MATERIAL</code> berubah menjadi{' '}
-              <strong>STOK TERPAKAI</strong>, dan datanya otomatis ditambahkan ke baris baru pada
-              Sheet <code className="font-mono font-bold">EKSEKUSI_MIMS</code> lengkap dengan{' '}
-              <strong>TIMESTAMP EKSEKUSI (Kolom A)</strong>.
+              Setiap kali <strong>Material Masuk</strong> di-scan QR, baris baru ditambahkan ke Sheet{' '}
+              <code className="font-mono font-bold">MATERIAL_MASUK</code> dengan keterangan{' '}
+              <strong>STOK SIAP</strong>. Saat <strong>Material Keluar</strong> di-scan QR, statusnya
+              pada <code className="font-mono font-bold">MATERIAL_MASUK</code> berubah dari{' '}
+              <strong>STOK SIAP</strong> menjadi <strong>TERPAKAI</strong>.
             </p>
           </div>
 
@@ -229,8 +275,8 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   {googleUser && accessToken && !needsAuth
-                    ? `Terhubung sebagai ${googleUser.displayName || googleUser.email} (${googleUser.email}). Mendukung penulisan otomatis ke Sheet MATERIAL & EKSEKUSI_MIMS.`
-                    : 'Masuk dengan Google untuk menyinkronkan Sheet MATERIAL & EKSEKUSI_MIMS langsung ke Google Spreadsheet Anda.'}
+                    ? `Terhubung sebagai ${googleUser.displayName || googleUser.email} (${googleUser.email}). Mendukung penulisan otomatis ke Sheet MATERIAL_MASUK & EKSEKUSI_MIMS.`
+                    : 'Masuk dengan Google untuk menyinkronkan Sheet MATERIAL_MASUK & EKSEKUSI_MIMS langsung ke Google Spreadsheet Anda.'}
                 </p>
               </div>
 
@@ -244,55 +290,171 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                   <span>Keluar Akun</span>
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={onGoogleLogin}
-                  disabled={isSigningIn}
-                  className="gsi-material-button shrink-0"
-                >
-                  <div className="gsi-material-button-state"></div>
-                  <div className="gsi-material-button-content-wrapper">
-                    <div className="gsi-material-button-icon">
-                      <svg
-                        version="1.1"
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 48 48"
-                        xmlnsXlink="http://www.w3.org/1999/xlink"
-                        style={{ display: 'block' }}
-                      >
-                        <path
-                          fill="#EA4335"
-                          d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                        ></path>
-                        <path
-                          fill="#4285F4"
-                          d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                        ></path>
-                        <path
-                          fill="#FBBC05"
-                          d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                        ></path>
-                        <path
-                          fill="#34A853"
-                          d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                        ></path>
-                        <path fill="none" d="M0 0h48v48H0z"></path>
-                      </svg>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={onGoogleLogin}
+                    disabled={isSigningIn}
+                    className="gsi-material-button shrink-0"
+                  >
+                    <div className="gsi-material-button-state"></div>
+                    <div className="gsi-material-button-content-wrapper">
+                      <div className="gsi-material-button-icon">
+                        <svg
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 48 48"
+                          xmlnsXlink="http://www.w3.org/1999/xlink"
+                          style={{ display: 'block' }}
+                        >
+                          <path
+                            fill="#EA4335"
+                            d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                          ></path>
+                          <path
+                            fill="#4285F4"
+                            d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                          ></path>
+                          <path
+                            fill="#FBBC05"
+                            d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                          ></path>
+                          <path
+                            fill="#34A853"
+                            d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                          ></path>
+                          <path fill="none" d="M0 0h48v48H0z"></path>
+                        </svg>
+                      </div>
+                      <span className="gsi-material-button-contents">
+                        {isSigningIn ? 'Menghubungkan...' : 'Sign in with Google'}
+                      </span>
+                      <span style={{ display: 'none' }}>Sign in with Google</span>
                     </div>
-                    <span className="gsi-material-button-contents">
-                      {isSigningIn ? 'Menghubungkan...' : 'Sign in with Google'}
-                    </span>
-                    <span style={{ display: 'none' }}>Sign in with Google</span>
-                  </div>
-                </button>
+                  </button>
+
+                  {onDirectGisLogin && (
+                    <button
+                      type="button"
+                      onClick={onDirectGisLogin}
+                      disabled={isSigningIn}
+                      className="min-h-[40px] px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                      <span>Login Mode Mobile (OAuth Langsung)</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
+
+            {(!googleUser || needsAuth) && (
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700/70 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDomainHelper((prev) => !prev)}
+                  className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1.5"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {showDomainHelper
+                      ? 'Sembunyikan Solusi Error auth/unauthorized-domain di HP'
+                      : 'Muncul Error "Firebase: Error (auth/unauthorized-domain)" saat Login di HP? Klik di sini'}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* Mobile Unauthorized-Domain Diagnostic & Fix Card */}
+            {showDomainHelper && (
+              <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <div className="font-bold text-amber-950 dark:text-amber-100">
+                      Penyebab &amp; Cara Mengatasi Error (auth/unauthorized-domain) di Mobile:
+                    </div>
+                    <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+                      Saat membuka aplikasi dari HP menggunakan link <em>Shared App URL</em> atau{' '}
+                      <em>Dev URL</em>, domain Cloud Run harus didaftarkan ke daftar{' '}
+                      <strong>Authorized domains</strong> pada Firebase Console project{' '}
+                      <code className="font-mono font-bold">{FIREBASE_PROJECT_ID}</code>:
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 1: Copy Domain(s) */}
+                <div className="space-y-1.5">
+                  <div className="font-semibold text-slate-900 dark:text-white">
+                    1. Salin Domain Aplikasi Ini:
+                  </div>
+                  <div className="space-y-1.5">
+                    {recommendedDomains.map((dom) => (
+                      <div
+                        key={dom}
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-slate-700"
+                      >
+                        <code className="font-mono text-[11px] text-slate-800 dark:text-slate-200 truncate">
+                          {dom}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyDomain(dom)}
+                          className="min-h-[32px] px-2.5 py-1 text-[11px] font-bold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 rounded-lg flex items-center gap-1 shrink-0"
+                        >
+                          {copiedDomain === dom ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Tersalin</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Salin Domain</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step 2: Open Firebase Console Authorized Domains */}
+                <div className="space-y-1.5">
+                  <div className="font-semibold text-slate-900 dark:text-white">
+                    2. Tambahkan ke Firebase Console → Authorized Domains:
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Buka tautan di bawah, gulir ke bagian <strong>Authorized domains</strong>, klik{' '}
+                    <strong>Add domain</strong>, lalu tempel domain di atas dan klik{' '}
+                    <strong>Add</strong>:
+                  </p>
+                  <a
+                    href={FIREBASE_AUTH_DOMAINS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full min-h-[40px] px-3.5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <span>Buka Firebase Auth Settings ({FIREBASE_PROJECT_ID})</span>
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                  </a>
+                </div>
+
+                {/* Step 3: Alternative Without Firebase Login */}
+                <div className="pt-2 border-t border-amber-200/80 dark:border-amber-800/60 text-[11px] text-slate-700 dark:text-slate-300">
+                  <strong>Tips Tanpa Login di HP:</strong> Anda juga dapat langsung menempelkan{' '}
+                  <strong>Link Google Spreadsheet</strong> pada kolom{' '}
+                  <em>&quot;Hubungkan via Link / ID Google Spreadsheet&quot;</em> di bawah untuk
+                  menyinkronkan data tanpa perlu login Firebase Auth.
+                </div>
+              </div>
+            )}
           </div>
 
-          {localError && (
+          {(localError || authDomainError) && (
             <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 flex items-start gap-2.5 text-xs text-red-900 dark:text-red-200">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <span>{localError}</span>
+              <span>{localError || authDomainError}</span>
             </div>
           )}
 
@@ -329,7 +491,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                   >
                     {connectedSheet.sheets.map((s) => (
                       <option key={s.sheetId} value={s.title}>
-                        {s.title} (GID={s.sheetId})
+                        {s.title}
                       </option>
                     ))}
                   </select>
@@ -357,7 +519,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                     className="min-h-[42px] px-3 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl flex items-center justify-center gap-1.5"
                   >
                     <Upload className="w-3.5 h-3.5" />
-                    <span>Kirim MATERIAL</span>
+                    <span>Kirim MATERIAL_MASUK</span>
                   </button>
                 </div>
               </div>
@@ -392,7 +554,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Membuat file Google Spreadsheet baru dengan Tab{' '}
-                  <code className="font-mono">MATERIAL</code> ({totalRows} baris) dan Tab{' '}
+                  <code className="font-mono">MATERIAL_MASUK</code> ({totalRows} baris) dan Tab{' '}
                   <code className="font-mono">EKSEKUSI_MIMS</code> ({mimsRowsCount} baris).
                 </p>
                 <input
@@ -496,11 +658,11 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <a
                 href="/api/export/csv"
-                download="LOGISTIK_SINJAI_MATERIAL_GID_0.csv"
+                download="LOGISTIK_SINJAI_MATERIAL_MASUK.csv"
                 className="min-h-[44px] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 <Download className="w-4 h-4" />
-                <span>Unduh CSV MATERIAL</span>
+                <span>Unduh CSV MATERIAL_MASUK</span>
               </a>
               <a
                 href="/api/export/eksekusi-mims-csv"

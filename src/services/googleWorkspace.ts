@@ -30,6 +30,140 @@ provider.setCustomParameters({
 let isSigningIn = false;
 // Cache the access token in memory ONLY (never in localStorage/sessionStorage).
 let cachedAccessToken: string | null = null;
+let cachedFallbackUser: User | null = null;
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            prompt?: string;
+            callback: (response: {
+              access_token?: string;
+              error?: string;
+              error_description?: string;
+            }) => void;
+            error_callback?: (err: { type?: string; message?: string }) => void;
+          }) => {
+            requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+          };
+        };
+      };
+    };
+  }
+}
+
+export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0123226455';
+export const FIREBASE_AUTH_DOMAINS_URL = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`;
+export const GCP_OAUTH_CLIENTS_URL = `https://console.cloud.google.com/apis/credentials?project=${FIREBASE_PROJECT_ID}`;
+
+async function fetchGoogleUserProfile(accessToken: string): Promise<User> {
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const profile = await res.json();
+      return {
+        uid: profile.sub || 'google-oauth-user',
+        email: profile.email || 'user@gmail.com',
+        displayName: profile.name || profile.email || 'Petugas Google Workspace',
+        photoURL: profile.picture || null,
+      } as User;
+    }
+  } catch {
+    // Ignore profile fetch error and use default user metadata
+  }
+  return {
+    uid: 'google-oauth-user',
+    email: 'Terhubung via Google OAuth',
+    displayName: 'Petugas Google Workspace',
+    photoURL: null,
+  } as User;
+}
+
+export const signInWithGoogleIdentityServices = (): Promise<{
+  user: User;
+  accessToken: string;
+}> => {
+  return new Promise((resolve, reject) => {
+    const oauth2 = window.google?.accounts?.oauth2;
+    const clientId = firebaseConfig.oAuthClientId;
+
+    if (!oauth2 || !clientId) {
+      reject(
+        new Error(
+          'Google Identity Services belum siap atau OAuth Client ID tidak ditemukan.'
+        )
+      );
+      return;
+    }
+
+    const scopeList = [
+      ...SCOPES,
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ].join(' ');
+
+    const tokenClient = oauth2.initTokenClient({
+      client_id: clientId,
+      scope: scopeList,
+      prompt: 'consent',
+      callback: async (response) => {
+        if (response.error || !response.access_token) {
+          reject(
+            new Error(
+              response.error_description ||
+                response.error ||
+                'Gagal mendapatkan token dari Google Identity Services.'
+            )
+          );
+          return;
+        }
+        cachedAccessToken = response.access_token;
+        const user = await fetchGoogleUserProfile(response.access_token);
+        cachedFallbackUser = user;
+        resolve({ user, accessToken: response.access_token });
+      },
+      error_callback: (err) => {
+        reject(
+          new Error(
+            err?.message ||
+              err?.type ||
+              'Popup login Google ditutup atau diblokir oleh browser mobile.'
+          )
+        );
+      },
+    });
+
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+  });
+};
+
+export const setManualGoogleAccessToken = async (
+  rawToken: string
+): Promise<{ user: User; accessToken: string }> => {
+  const cleaned = rawToken.trim().replace(/^Bearer\s+/i, '');
+  if (!cleaned) {
+    throw new Error('Access Token Google tidak boleh kosong.');
+  }
+  // Verify token by listing 1 file from Drive or reading userinfo
+  const testRes = await fetch('https://www.googleapis.com/drive/v3/files?pageSize=1', {
+    headers: { Authorization: `Bearer ${cleaned}` },
+  });
+  if (!testRes.ok) {
+    throw new Error(
+      'Access Token tidak valid atau belum memiliki izin Google Drive / Google Sheets.'
+    );
+  }
+  cachedAccessToken = cleaned;
+  const user = await fetchGoogleUserProfile(cleaned);
+  cachedFallbackUser = user;
+  return { user, accessToken: cleaned };
+};
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
@@ -43,6 +177,8 @@ export const initAuth = (
         cachedAccessToken = null;
         if (onAuthFailure) onAuthFailure();
       }
+    } else if (cachedFallbackUser && cachedAccessToken) {
+      if (onAuthSuccess) onAuthSuccess(cachedFallbackUser, cachedAccessToken);
     } else {
       cachedAccessToken = null;
       if (onAuthFailure) onAuthFailure();
@@ -63,9 +199,37 @@ export const googleSignIn = async (): Promise<{
     }
 
     cachedAccessToken = credential.accessToken;
+    cachedFallbackUser = null;
     return { user: result.user, accessToken: cachedAccessToken };
-  } catch (error) {
-    console.error('Sign in error:', error);
+  } catch (error: any) {
+    console.error('Firebase signInWithPopup error:', error);
+    const errCode = String(error?.code || '');
+    const errMsg = String(error?.message || '');
+
+    // If Firebase Auth rejects the mobile/shared domain with auth/unauthorized-domain
+    // or popup issues, automatically try Google Identity Services (GIS) OAuth2 Token Client
+    if (
+      errCode === 'auth/unauthorized-domain' ||
+      errMsg.includes('auth/unauthorized-domain') ||
+      errCode === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      try {
+        const gisResult = await signInWithGoogleIdentityServices();
+        return gisResult;
+      } catch (gisErr: any) {
+        const currentDomain =
+          typeof window !== 'undefined' ? window.location.hostname : '';
+        const enhancedError: any = new Error(
+          `Domain aplikasi saat ini (${currentDomain}) belum terdaftar di daftar "Authorized domains" Firebase Authentication untuk project "${FIREBASE_PROJECT_ID}".`
+        );
+        enhancedError.code = 'auth/unauthorized-domain';
+        enhancedError.currentDomain = currentDomain;
+        enhancedError.firebaseAuthUrl = FIREBASE_AUTH_DOMAINS_URL;
+        enhancedError.gisError = gisErr?.message || '';
+        throw enhancedError;
+      }
+    }
+
     throw error;
   } finally {
     isSigningIn = false;
@@ -77,8 +241,9 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const logoutGoogle = async (): Promise<void> => {
-  await auth.signOut();
+  await auth.signOut().catch(() => {});
   cachedAccessToken = null;
+  cachedFallbackUser = null;
 };
 
 export interface DriveSpreadsheetFile {
@@ -156,7 +321,7 @@ export async function getSpreadsheetMetadata(
   const data = await res.json();
   const sheets: SheetTabInfo[] = (data.sheets || []).map((s: any) => ({
     sheetId: s.properties?.sheetId ?? 0,
-    title: s.properties?.title || 'MATERIAL',
+    title: s.properties?.title || 'MATERIAL_MASUK',
     rowCount: s.properties?.gridProperties?.rowCount,
     columnCount: s.properties?.gridProperties?.columnCount,
   }));
@@ -207,7 +372,7 @@ export const EKSEKUSI_MIMS_HEADERS = [
   'STATUS',
   'NO DOKUMEN / BON',
   'PETUGAS EKSEKUSI',
-  'REF BARIS MATERIAL',
+  'REF BARIS MATERIAL_MASUK',
 ];
 
 export function materialRowToSheetValues(row: MaterialRow): string[] {
@@ -226,7 +391,7 @@ export function materialRowToSheetValues(row: MaterialRow): string[] {
     row.unitInduk || 'UIW SULSELRABAR',
     row.unit || 'ULP SINJAI',
     row.storLocName || 'Gd ULP Sinjai',
-    row.status || 'SIAP PAKAI',
+    row.status || 'STOK SIAP',
   ];
 }
 
@@ -246,10 +411,10 @@ export function mimsRowToSheetValues(row: EksekusiMimsRow): string[] {
     row.unitInduk || 'UIW SULSELRABAR',
     row.unit || 'ULP SINJAI',
     row.storLocName || 'Gd ULP Sinjai',
-    row.status || 'STOK TERPAKAI',
+    row.status || 'TERPAKAI',
     row.noDokumen || 'BON-SINJAI',
     row.petugas || 'Petugas Gudang ULP Sinjai',
-    `MATERIAL!Baris #${row.sourceMaterialRowNumber}`,
+    `MATERIAL_MASUK!Baris #${row.sourceMaterialRowNumber}`,
   ];
 }
 
@@ -290,8 +455,8 @@ export async function readMaterialRowsFromGoogleSheet(
     const rawColO = String(parts[14] || '').trim().toUpperCase();
     const status: MaterialStatus =
       rawColO === 'STOK TERPAKAI' || rawColO === 'TERPAKAI'
-        ? 'STOK TERPAKAI'
-        : 'SIAP PAKAI';
+        ? 'TERPAKAI'
+        : 'STOK SIAP';
 
     rows.push({
       rowNumber: i + 1,
@@ -513,7 +678,7 @@ export async function createNewWarehouseGoogleSheet(
         {
           properties: {
             sheetId: 0,
-            title: 'MATERIAL',
+            title: 'MATERIAL_MASUK',
             gridProperties: {
               rowCount: Math.max(1200, rows.length + 100),
               columnCount: 15,
@@ -546,7 +711,7 @@ export async function createNewWarehouseGoogleSheet(
   const created = await createRes.json();
   const spreadsheetId: string = created.spreadsheetId;
 
-  await overwriteGoogleSheetRows(accessToken, spreadsheetId, 'MATERIAL', rows);
+  await overwriteGoogleSheetRows(accessToken, spreadsheetId, 'MATERIAL_MASUK', rows);
   await overwriteEksekusiMimsSheetRows(accessToken, spreadsheetId, mimsRows, 'EKSEKUSI_MIMS');
 
   return {
@@ -558,7 +723,7 @@ export async function createNewWarehouseGoogleSheet(
     sheets: [
       {
         sheetId: 0,
-        title: 'MATERIAL',
+        title: 'MATERIAL_MASUK',
         rowCount: rows.length + 1,
         columnCount: 15,
       },
@@ -664,7 +829,7 @@ export async function updateOutboundStatusInGoogleSheet(
   updatedRows: MaterialRow[],
   addedMimsRows: EksekusiMimsRow[] = []
 ): Promise<void> {
-  // 1. Fetch current Column B (SN MATERIAL) from Sheet "MATERIAL" to map exact row numbers
+  // 1. Fetch current Column B (SN MATERIAL) from Sheet "MATERIAL_MASUK" to map exact row numbers
   const snRange = encodeURIComponent(`${sheetTitle}!B1:B5000`);
   const readRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
@@ -702,7 +867,7 @@ export async function updateOutboundStatusInGoogleSheet(
       dataPayload.push({
         range: `${sheetTitle}!O${targetRowNum}`,
         majorDimension: 'ROWS',
-        values: [['STOK TERPAKAI']],
+        values: [['TERPAKAI']],
       });
     }
   }
@@ -729,7 +894,7 @@ export async function updateOutboundStatusInGoogleSheet(
       const errData = await batchRes.json().catch(() => ({}));
       throw new Error(
         errData?.error?.message ||
-          `Gagal memperbarui Kolom O (STOK TERPAKAI) di Google Sheets (${batchRes.status})`
+          `Gagal memperbarui status (TERPAKAI) di Google Sheets (${batchRes.status})`
       );
     }
   }

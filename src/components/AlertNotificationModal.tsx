@@ -77,9 +77,9 @@ export const AlertNotificationModal: React.FC<AlertNotificationModalProps> = ({
                 {isSuccess
                   ? 'Notifikasi Transaksi Gudang'
                   : isMismatch
-                  ? 'Peringatan Error — Ketidakcocokan Jumlah'
+                  ? 'Peringatan Error Validasi'
                   : isDuplicate
-                  ? 'Peringatan — Barcode Sudah Pernah Di-scan'
+                  ? 'Peringatan — QR Code Sudah Pernah Di-scan'
                   : 'Notifikasi Peringatan Sistem'}
               </p>
               <h3
@@ -112,12 +112,12 @@ export const AlertNotificationModal: React.FC<AlertNotificationModalProps> = ({
             {alert.message}
           </p>
 
-          {/* Details when a Duplicate Barcode was scanned */}
+          {/* Details when a Duplicate QR Code was scanned */}
           {alert.snMaterial && (
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
                 <span className="text-slate-500 dark:text-slate-400">
-                  SN MATERIAL (Kolom B):
+                  Hasil Scan QR (SN Material):
                 </span>
                 <span className="font-mono font-bold text-slate-900 dark:text-slate-100 tabular-nums break-all">
                   {alert.snMaterial}
@@ -130,7 +130,7 @@ export const AlertNotificationModal: React.FC<AlertNotificationModalProps> = ({
                   <div className="grid grid-cols-2 gap-3 text-xs pt-1">
                     <div>
                       <span className="text-slate-500 dark:text-slate-400 block">
-                        Posisi Sheet &quot;MATERIAL&quot;:
+                        Posisi Sheet &quot;MATERIAL_MASUK&quot;:
                       </span>
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100 tabular-nums flex items-center gap-1 mt-0.5">
                         <FileSpreadsheet className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
@@ -139,11 +139,11 @@ export const AlertNotificationModal: React.FC<AlertNotificationModalProps> = ({
                     </div>
                     <div>
                       <span className="text-slate-500 dark:text-slate-400 block">
-                        Status Kolom O:
+                        Status Keterangan:
                       </span>
                       <span
                         className={`font-mono font-bold mt-0.5 block ${
-                          alert.existingRow.status === 'STOK TERPAKAI'
+                          alert.existingRow.status === 'TERPAKAI'
                             ? 'text-amber-700 dark:text-amber-400'
                             : 'text-emerald-700 dark:text-emerald-400'
                         }`}
@@ -161,7 +161,7 @@ export const AlertNotificationModal: React.FC<AlertNotificationModalProps> = ({
                     </div>
                     <div>
                       <span className="text-slate-500 dark:text-slate-400 block">
-                        Tanggal (Kolom A):
+                        Tanggal:
                       </span>
                       <span className="font-mono text-slate-800 dark:text-slate-200 tabular-nums">
                         {alert.existingRow.tanggalHistory}

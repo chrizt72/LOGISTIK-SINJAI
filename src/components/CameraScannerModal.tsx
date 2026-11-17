@@ -37,7 +37,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           { facingMode: 'environment' },
           {
             fps: 12,
-            qrbox: { width: 260, height: 130 },
+            qrbox: { width: 220, height: 220 },
           },
           (decodedText) => {
             if (!mounted) return;
@@ -63,7 +63,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
               ? err.message
               : 'Kamera tidak dapat diakses pada perangkat ini.';
           setErrorMsg(
-            `Kamera tidak tersedia atau izin ditolak (${message}). Anda tetap dapat menggunakan Scanner Barcode USB/Bluetooth atau tombol Simulasi Scan Cepat.`
+            `Kamera tidak tersedia atau izin ditolak (${message}). Anda tetap dapat menggunakan Scanner QR atau memasukkan kode SN secara langsung.`
           );
         }
       } finally {
@@ -108,7 +108,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           <div className="flex items-center gap-2.5 min-w-0">
             <Camera className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-              Kamera Scan Barcode — {modeLabel}
+              Kamera Scan QR Code — {modeLabel}
             </h3>
           </div>
           <button
@@ -123,15 +123,17 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
 
         <div className="p-5 space-y-4">
           <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Arahkan kamera smartphone ke Barcode 1D (Code-128) pada kWh Meter PLN untuk memindai Nomor Serial Number (Kolom B).
+            Arahkan kamera smartphone ke <strong>QR Code</strong> pada material PLN untuk memindai
+            Nomor Serial Number (contoh:{' '}
+            <code className="font-mono font-semibold">PLN0219000022402639005330251</code>).
           </p>
 
-          <div className="relative w-full min-h-[240px] bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center border border-slate-800">
+          <div className="relative w-full min-h-[250px] bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center border border-slate-800">
             <div id="html5qr-code-full-region" className="w-full" />
             {isStarting && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-300 text-xs bg-slate-950/80">
                 <RefreshCw className="w-6 h-6 animate-spin text-sky-400" />
-                <span>Mengaktifkan kamera belakang...</span>
+                <span>Mengaktifkan kamera belakang untuk Scan QR Code...</span>
               </div>
             )}
           </div>
@@ -151,7 +153,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
               onClick={onClose}
               className="w-full min-h-[48px] px-4 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors whitespace-nowrap shrink-0"
             >
-              Selesai / Tutup Kamera
+              Selesai / Tutup Kamera QR
             </button>
           </div>
         </div>

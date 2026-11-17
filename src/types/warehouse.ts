@@ -1,4 +1,4 @@
-export type MaterialStatus = 'SIAP PAKAI' | 'STOK TERPAKAI';
+export type MaterialStatus = 'STOK SIAP' | 'TERPAKAI';
 
 export interface MaterialRow {
   rowNumber: number; // 1-based spreadsheet row number (header is row 1, data starts at row 2)
@@ -16,7 +16,7 @@ export interface MaterialRow {
   unitInduk: string; // Col L
   unit: string; // Col M
   storLocName: string; // Col N
-  status: MaterialStatus; // Col O ("SIAP PAKAI" | "STOK TERPAKAI")
+  status: MaterialStatus; // Col O ("STOK SIAP" | "TERPAKAI")
   lastScannedAt?: string;
   lastScanType?: 'MASUK' | 'KELUAR' | 'INITIAL';
   petugas?: string;
@@ -39,10 +39,10 @@ export interface EksekusiMimsRow {
   unitInduk: string; // Col L: UNIT INDUK
   unit: string; // Col M: UNIT
   storLocName: string; // Col N: STOR LOC NAME
-  status: MaterialStatus; // Col O: STATUS ("STOK TERPAKAI")
+  status: MaterialStatus; // Col O: STATUS ("TERPAKAI")
   noDokumen: string; // Col P: NO DOKUMEN / BON
   petugas: string; // Col Q: PETUGAS EKSEKUSI
-  sourceMaterialRowNumber: number; // Col R: REF BARIS SHEET MATERIAL
+  sourceMaterialRowNumber: number; // Col R: REF BARIS SHEET MATERIAL_MASUK
 }
 
 export interface MaterialCatalogItem {

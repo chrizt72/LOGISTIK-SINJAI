@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  ScanBarcode,
+  QrCode,
   Camera,
   ArrowDownLeft,
   ArrowUpRight,
@@ -8,11 +8,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   XOctagon,
-  Trash2,
   Download,
   FileSpreadsheet,
   Plus,
-  Minus,
   History,
   Layers,
   ChevronLeft,
@@ -55,6 +53,7 @@ import { User } from 'firebase/auth';
 import {
   initAuth,
   googleSignIn,
+  signInWithGoogleIdentityServices,
   getAccessToken,
   logoutGoogle,
   SpreadsheetMetadata,
@@ -86,7 +85,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<MaterialCatalogItem[]>([]);
   const [sheetConfig, setSheetConfig] = useState({
     spreadsheetName: 'LOGISTIK_SINJAI',
-    sheetName: 'MATERIAL',
+    sheetName: 'MATERIAL_MASUK',
     mimsSheetName: 'EKSEKUSI_MIMS',
     gid: '0',
     googleSheetUrl: '',
@@ -96,9 +95,9 @@ export default function App() {
 
   // Navigation & UI state
   const [activeSection, setActiveSection] = useState<ActiveSection>('keluar');
-  const [activeSpreadsheetTab, setActiveSpreadsheetTab] = useState<'MATERIAL' | 'EKSEKUSI_MIMS'>(
-    'MATERIAL'
-  );
+  const [activeSpreadsheetTab, setActiveSpreadsheetTab] = useState<
+    'MATERIAL_MASUK' | 'EKSEKUSI_MIMS'
+  >('MATERIAL_MASUK');
   const [copiedMimsFormat, setCopiedMimsFormat] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
@@ -117,8 +116,9 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
+  const [authDomainError, setAuthDomainError] = useState<string | null>(null);
   const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(null);
-  const [selectedSheetTab, setSelectedSheetTab] = useState<string>('MATERIAL');
+  const [selectedSheetTab, setSelectedSheetTab] = useState<string>('MATERIAL_MASUK');
   const [pendingSheetsMutation, setPendingSheetsMutation] =
     useState<PendingSheetsMutation | null>(null);
 
@@ -128,9 +128,7 @@ export default function App() {
 
   // Outbound (Material Keluar) State
   const [outboundScanInput, setOutboundScanInput] = useState<string>('');
-  const [expectedOutboundQty, setExpectedOutboundQty] = useState<number>(3);
   const [expectedOutboundMat, setExpectedOutboundMat] = useState<string>('ALL');
-  const [outboundQueue, setOutboundQueue] = useState<MaterialRow[]>([]);
   const [isProcessingOutbound, setIsProcessingOutbound] = useState<boolean>(false);
 
   // Inbound (Material Masuk) State
@@ -144,7 +142,7 @@ export default function App() {
   // Spreadsheet Table Filter & Pagination State
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<
-    'ALL' | 'SIAP PAKAI' | 'STOK TERPAKAI' | 'BARU_MASUK'
+    'ALL' | 'STOK SIAP' | 'TERPAKAI' | 'BARU_MASUK'
   >('ALL');
   const [materialFilter, setMaterialFilter] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -193,25 +191,65 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
+    setAuthDomainError(null);
     try {
       const result = await googleSignIn();
       if (result) {
         setGoogleUser(result.user);
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
+        setAuthDomainError(null);
         setInlineBanner({
           type: 'success',
           title: 'Berhasil Masuk ke Google Workspace',
-          message: `Terhubung sebagai ${result.user.email}. Sekarang Anda dapat memilih atau membuat Sheet "MATERIAL" langsung di Google Sheets.`,
+          message: `Terhubung sebagai ${result.user.email}. Sekarang Anda dapat menyinkronkan Sheet "MATERIAL_MASUK" langsung di Google Sheets.`,
         });
       }
     } catch (err: any) {
       console.error('Google Sign-In failed:', err);
+      const msg =
+        err?.message || 'Autentikasi Google dibatalkan atau terkendala otorisasi domain.';
+      if (
+        err?.code === 'auth/unauthorized-domain' ||
+        String(msg).includes('unauthorized-domain') ||
+        String(msg).includes('Authorized domains')
+      ) {
+        setAuthDomainError(msg);
+        setIsSyncModalOpen(true);
+      }
       setInlineBanner({
         type: 'error',
-        title: 'Gagal Masuk dengan Google',
-        message: err?.message || 'Autentikasi Google dibatalkan atau gagal.',
+        title: 'Kendala Login Google di Perangkat Mobile (auth/unauthorized-domain)',
+        message: msg,
       });
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleDirectGisLogin = async () => {
+    setIsSigningIn(true);
+    setAuthDomainError(null);
+    try {
+      const result = await signInWithGoogleIdentityServices();
+      if (result) {
+        setGoogleUser(result.user);
+        setAccessToken(result.accessToken);
+        setNeedsAuth(false);
+        setAuthDomainError(null);
+        setInlineBanner({
+          type: 'success',
+          title: 'Berhasil Masuk via Google OAuth Mobile',
+          message: `Terhubung sebagai ${result.user.email}. Anda kini dapat menyinkronkan Sheet MATERIAL_MASUK.`,
+        });
+      }
+    } catch (err: any) {
+      console.error('Direct GIS login failed:', err);
+      const msg =
+        err?.message ||
+        'Gagal login melalui Google Identity Services. Pastikan domain aplikasi sudah terdaftar di Firebase Console → Authorized domains.';
+      setAuthDomainError(msg);
+      setIsSyncModalOpen(true);
     } finally {
       setIsSigningIn(false);
     }
@@ -241,7 +279,7 @@ export default function App() {
       setInlineBanner({
         type: 'warning',
         title: `Sheet "${tabTitle}" Kosong`,
-        message: `Sheet "${tabTitle}" pada "${title}" belum memiliki baris material. Klik "Kirim ${rows.length} Baris" untuk mengisi data awal.`,
+        message: `Sheet "${tabTitle}" pada "${title}" belum memiliki baris material. Klik "Kirim MATERIAL_MASUK" untuk mengisi data awal.`,
       });
       return;
     }
@@ -278,7 +316,7 @@ export default function App() {
     setPendingSheetsMutation({
       type: 'OVERWRITE_SHEET',
       title: `Perbarui Isi Sheet "${tabTitle}" pada Google Spreadsheet "${title}"?`,
-      description: `Tindakan ini akan memperbarui dan menulis ${rows.length} baris data stok material (Kolom A s/d Kolom O) ke tab "${tabTitle}" di Google Sheets milik Anda.`,
+      description: `Tindakan ini akan memperbarui dan menulis ${rows.length} baris data stok material ke tab "${tabTitle}" di Google Sheets milik Anda.`,
       spreadsheetTitle: title,
       sheetTabName: tabTitle,
       affectedRows: rows,
@@ -302,13 +340,13 @@ export default function App() {
   };
 
   const requestCreateNewGoogleSheet = (newTitle: string) => {
-    const cleanTitle = newTitle.trim() || 'LOGISTIK_SINJAI - MATERIAL & EKSEKUSI_MIMS';
+    const cleanTitle = newTitle.trim() || 'LOGISTIK_SINJAI - MATERIAL_MASUK & EKSEKUSI_MIMS';
     setPendingSheetsMutation({
       type: 'CREATE_NEW_SHEET',
       title: `Buat File Google Spreadsheet Baru "${cleanTitle}" di Google Drive?`,
-      description: `Sistem akan membuat file Google Spreadsheet baru dengan 2 Sheet: "MATERIAL" (${rows.length} baris stok) dan "EKSEKUSI_MIMS" (${eksekusiMimsRows.length} baris material keluar lengkap dengan Timestamp).`,
+      description: `Sistem akan membuat file Google Spreadsheet baru dengan Sheet "MATERIAL_MASUK" (${rows.length} baris stok) dan Sheet "EKSEKUSI_MIMS" (${eksekusiMimsRows.length} baris material keluar).`,
       spreadsheetTitle: cleanTitle,
-      sheetTabName: 'MATERIAL & EKSEKUSI_MIMS',
+      sheetTabName: 'MATERIAL_MASUK & EKSEKUSI_MIMS',
       affectedRows: rows,
       totalCount: rows.length,
       onConfirm: async () => {
@@ -325,11 +363,11 @@ export default function App() {
           eksekusiMimsRows
         );
         setConnectedSheet(meta);
-        setSelectedSheetTab('MATERIAL');
+        setSelectedSheetTab('MATERIAL_MASUK');
         setSheetConfig((prev) => ({
           ...prev,
           spreadsheetName: meta.title,
-          sheetName: 'MATERIAL',
+          sheetName: 'MATERIAL_MASUK',
           mimsSheetName: 'EKSEKUSI_MIMS',
           googleSheetUrl: meta.spreadsheetUrl,
         }));
@@ -337,7 +375,7 @@ export default function App() {
         setInlineBanner({
           type: 'success',
           title: `File Google Spreadsheet "${meta.title}" Berhasil Dibuat!`,
-          message: `Sheet "MATERIAL" (${rows.length} baris) & Sheet "EKSEKUSI_MIMS" telah dibuat di Google Drive Anda.`,
+          message: `Sheet "MATERIAL_MASUK" (${rows.length} baris) telah dibuat di Google Drive Anda.`,
         });
       },
     });
@@ -347,7 +385,7 @@ export default function App() {
     setPendingSheetsMutation({
       type: 'OVERWRITE_SHEET',
       title: `Format & Sinkronkan Sheet "EKSEKUSI_MIMS" pada "${title}"?`,
-      description: `Tindakan ini akan memformat header otomatis (Kolom A: TIMESTAMP EKSEKUSI s/d Kolom R: REF BARIS MATERIAL) dan menulis ${eksekusiMimsRows.length} baris data Material Keluar ke tab "EKSEKUSI_MIMS" di Google Sheets Anda.`,
+      description: `Tindakan ini akan menulis ${eksekusiMimsRows.length} baris data Material Keluar ke tab "EKSEKUSI_MIMS" di Google Sheets Anda.`,
       spreadsheetTitle: title,
       sheetTabName: 'EKSEKUSI_MIMS',
       affectedRows: eksekusiMimsRows.map((m) => ({
@@ -386,7 +424,7 @@ export default function App() {
         setInlineBanner({
           type: 'success',
           title: 'Sheet "EKSEKUSI_MIMS" Berhasil Disinkronkan ke Google Sheets!',
-          message: `Format kolom otomatis beserta ${eksekusiMimsRows.length} baris Material Keluar & Timestamp telah disimpan ke tab "EKSEKUSI_MIMS".`,
+          message: `${eksekusiMimsRows.length} baris Material Keluar telah disimpan ke tab "EKSEKUSI_MIMS".`,
         });
       },
     });
@@ -397,8 +435,8 @@ export default function App() {
       if (!connectedSheet || !accessToken || needsAuth || addedRows.length === 0) return;
       setPendingSheetsMutation({
         type: 'APPEND_INBOUND',
-        title: `Tambahkan ${addedRows.length} Baris Material Masuk ke Google Sheets?`,
-        description: `Apakah Anda ingin menambahkan ${addedRows.length} baris baru hasil scan Material Masuk ke Google Spreadsheet "${connectedSheet.title}" (Tab: ${selectedSheetTab}) dengan Kolom O = "SIAP PAKAI"?`,
+        title: `Tambahkan ${addedRows.length} Baris ke Sheet "MATERIAL_MASUK"?`,
+        description: `Apakah Anda ingin menambahkan ${addedRows.length} baris baru hasil scan QR Material Masuk melanjutkan baris pada Google Spreadsheet "${connectedSheet.title}" (Tab: ${selectedSheetTab}) dengan status "STOK SIAP"?`,
         spreadsheetTitle: connectedSheet.title,
         sheetTabName: selectedSheetTab,
         affectedRows: addedRows,
@@ -420,7 +458,7 @@ export default function App() {
           setInlineBanner({
             type: 'success',
             title: 'Baris Material Masuk Ditambahkan ke Google Sheets!',
-            message: `${addedRows.length} baris baru berhasil ditambahkan ke "${connectedSheet.title}" (${selectedSheetTab}) dengan Kolom O = SIAP PAKAI.`,
+            message: `${addedRows.length} baris baru berhasil ditambahkan ke "${connectedSheet.title}" (${selectedSheetTab}) dengan status = STOK SIAP.`,
           });
         },
       });
@@ -433,10 +471,10 @@ export default function App() {
       if (!connectedSheet || !accessToken || needsAuth || updatedRows.length === 0) return;
       setPendingSheetsMutation({
         type: 'UPDATE_OUTBOUND',
-        title: `Update Sheet "MATERIAL" & Tambahkan ${updatedRows.length} Baris ke Sheet "EKSEKUSI_MIMS"?`,
-        description: `Konfirmasi: (1) Mengubah Kolom O menjadi "STOK TERPAKAI" pada Sheet "${selectedSheetTab}", dan (2) Menambahkan ${updatedRows.length} baris keluar baru lengkap dengan TIMESTAMP EKSEKUSI ke Sheet "EKSEKUSI_MIMS" di Google Spreadsheet "${connectedSheet.title}".`,
+        title: `Ubah Status Menjadi "TERPAKAI" pada Sheet "${selectedSheetTab}"?`,
+        description: `Konfirmasi: Mengubah status ${updatedRows.length} baris dari "STOK SIAP" menjadi "TERPAKAI" pada Sheet "${selectedSheetTab}" dan mencatatnya pada Material Keluar di Google Spreadsheet "${connectedSheet.title}".`,
         spreadsheetTitle: connectedSheet.title,
-        sheetTabName: `${selectedSheetTab} + EKSEKUSI_MIMS`,
+        sheetTabName: selectedSheetTab,
         affectedRows: updatedRows,
         totalCount: updatedRows.length,
         onConfirm: async () => {
@@ -456,8 +494,8 @@ export default function App() {
           setPendingSheetsMutation(null);
           setInlineBanner({
             type: 'success',
-            title: 'Google Sheets "MATERIAL" & "EKSEKUSI_MIMS" Berhasil Diperbarui!',
-            message: `${updatedRows.length} baris diubah menjadi STOK TERPAKAI pada Sheet "${selectedSheetTab}" dan otomatis ditambahkan beserta Timestamp ke Sheet "EKSEKUSI_MIMS".`,
+            title: 'Status Google Sheets Diperbarui Menjadi TERPAKAI!',
+            message: `${updatedRows.length} baris diubah dari STOK SIAP menjadi TERPAKAI pada Sheet "${selectedSheetTab}".`,
           });
         },
       });
@@ -476,7 +514,11 @@ export default function App() {
   );
 
   // ============================================================================
-  // 1. HANDLER SCAN BARCODE MATERIAL KELUAR (OUTBOUND)
+  // 1. HANDLER SCAN QR MATERIAL KELUAR (OUTBOUND)
+  // Menyesuaikan data pada Sheet "MATERIAL_MASUK":
+  // - Jika SN pada "MATERIAL_MASUK" masih berstatus "STOK SIAP" -> proses dilanjutkan
+  //   dan status berubah dari "STOK SIAP" menjadi "TERPAKAI".
+  // - Jika sudah tercatat pada Material Keluar ("TERPAKAI") -> muncul notifikasi peringatan.
   // ============================================================================
   const handleScanOutboundSN = useCallback(
     async (rawSN: string) => {
@@ -484,51 +526,53 @@ export default function App() {
       if (!cleanedSN) return;
 
       setOutboundScanInput('');
+      setIsProcessingOutbound(true);
 
       try {
-        const res = await fetch('/api/scan/verify', {
+        // 1. Verify QR against Sheet "MATERIAL_MASUK"
+        const verifyRes = await fetch('/api/scan/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             snMaterial: cleanedSN,
             mode: 'KELUAR',
-            sessionScannedSNs: outboundQueue.map((r) => r.snMaterial),
+            sessionScannedSNs: [],
             petugas,
           }),
         });
 
-        const data = await res.json();
-        if (data.stats) setStats(data.stats);
-        if (data.logs) setLogs(data.logs);
+        const verifyData = await verifyRes.json();
+        if (verifyData.stats) setStats(verifyData.stats);
+        if (verifyData.logs) setLogs(verifyData.logs);
 
-        if (!res.ok || !data.valid) {
+        if (!verifyRes.ok || !verifyData.valid) {
           triggerSound('error');
           const isDup =
-            data.errorType === 'DUPLICATE_IN_SESSION' ||
-            data.errorType === 'ALREADY_USED_OUTBOUND';
+            verifyData.errorType === 'DUPLICATE_IN_SESSION' ||
+            verifyData.errorType === 'ALREADY_USED_OUTBOUND';
 
           setInlineBanner({
             type: 'error',
-            title: data.title || 'Peringatan Scan Barcode Gagal',
-            message: data.message,
+            title: verifyData.title || 'Peringatan Scan QR Gagal',
+            message: verifyData.message,
           });
 
           setSystemAlert({
             isOpen: true,
             severity: isDup ? 'error-duplicate' : 'error-notfound',
-            title: data.title || 'Peringatan Scan Barcode',
-            message: data.message,
+            title: verifyData.title || 'Peringatan Scan QR Code',
+            message: verifyData.message,
             snMaterial: cleanedSN,
-            existingRow: data.existingRow,
+            existingRow: verifyData.existingRow,
           });
           return;
         }
 
-        const matchedRow: MaterialRow = data.existingRow;
+        const matchedRow: MaterialRow = verifyData.existingRow;
 
         if (expectedOutboundMat !== 'ALL' && matchedRow.noMaterial !== expectedOutboundMat) {
           triggerSound('error');
-          const msg = `Ketidakcocokan Material: Barcode SN ${cleanedSN} adalah No. Material ${matchedRow.noMaterial} (${matchedRow.spesifikasi}), tidak sesuai dengan permintaan No. Material ${expectedOutboundMat}.`;
+          const msg = `Ketidakcocokan Material: QR Code SN ${cleanedSN} adalah No. Material ${matchedRow.noMaterial} (${matchedRow.spesifikasi}), tidak sesuai dengan filter No. Material ${expectedOutboundMat}.`;
           setInlineBanner({
             type: 'error',
             title: 'Peringatan Error: Ketidakcocokan Jenis Material!',
@@ -545,146 +589,67 @@ export default function App() {
           return;
         }
 
-        const nextCount = outboundQueue.length + 1;
-        setOutboundQueue((prev) => [...prev, matchedRow]);
+        // 2. Karena pada Sheet "MATERIAL_MASUK" masih berstatus "STOK SIAP",
+        // proses langsung dilanjutkan dan status berubah dari "STOK SIAP" menjadi "TERPAKAI"
+        const outRes = await fetch('/api/scan/outbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            snList: [cleanedSN],
+            expectedNoMaterial: expectedOutboundMat,
+            petugas,
+            noDokumen,
+          }),
+        });
 
-        if (expectedOutboundQty > 0 && nextCount > expectedOutboundQty) {
+        const outData = await outRes.json();
+        if (outData.stats) setStats(outData.stats);
+        if (outData.logs) setLogs(outData.logs);
+
+        if (!outRes.ok || !outData.success) {
           triggerSound('error');
-          const diff = nextCount - expectedOutboundQty;
-          const mismatchMsg = `Jumlah barcode yang di-scan (${nextCount} unit) MELEBIHI Target Jumlah Pengeluaran (${expectedOutboundQty} unit) sebanyak +${diff} unit!`;
-
-          fetch('/api/log-mismatch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              expectedCount: expectedOutboundQty,
-              scannedCount: nextCount,
-              petugas,
-              noDokumen,
-              reason: `PERINGATAN OVER-SCAN MATERIAL KELUAR: Target ${expectedOutboundQty} unit, di-scan ${nextCount} unit (+${diff} unit).`,
-            }),
-          })
-            .then((r) => r.json())
-            .then((d) => {
-              if (d.stats) setStats(d.stats);
-              if (d.logs) setLogs(d.logs);
-            })
-            .catch(() => {});
-
           setInlineBanner({
             type: 'error',
-            title: 'Peringatan Error: Ketidakcocokan Jumlah Material Keluar (Melebihi Target)!',
-            message: mismatchMsg,
+            title: outData.title || 'Peringatan Error Pengeluaran Material',
+            message: outData.message,
           });
-
           setSystemAlert({
             isOpen: true,
-            severity: 'error-mismatch',
-            title: 'Peringatan Error: Ketidakcocokan Jumlah Material Keluar!',
-            message: mismatchMsg,
-            snMaterial: cleanedSN,
-            existingRow: matchedRow,
-            mismatchDetails: {
-              expectedCount: expectedOutboundQty,
-              scannedCount: nextCount,
-              difference: diff,
-            },
+            severity: 'error-duplicate',
+            title: outData.title || 'Peringatan Error Pengeluaran Material',
+            message: outData.message,
           });
           return;
         }
 
-        triggerSound('scan');
+        triggerSound('commit');
+        setRows(outData.rows || []);
+        if (Array.isArray(outData.eksekusiMimsRows)) {
+          setEksekusiMimsRows(outData.eksekusiMimsRows);
+        }
+
         setInlineBanner({
           type: 'success',
-          title: `Scan Barcode Berhasil (${nextCount}/${expectedOutboundQty} Unit)`,
-          message: `SN ${cleanedSN} (Baris #${matchedRow.rowNumber} · No. Material ${matchedRow.noMaterial}) masuk ke daftar pengeluaran.`,
+          title: `QR ${cleanedSN} Dikeluarkan — Status Berubah: STOK SIAP → TERPAKAI`,
+          message: `Data pada Sheet "MATERIAL_MASUK" (Baris #${matchedRow.rowNumber} · No. Material ${matchedRow.noMaterial}) masih berstatus STOK SIAP, proses dilanjutkan dan status berubah menjadi "TERPAKAI".`,
         });
+
+        if (Array.isArray(outData.updatedRows) && outData.updatedRows.length > 0) {
+          promptOutboundGoogleSheetsSync(outData.updatedRows, outData.addedMimsRows || []);
+        }
       } catch (err) {
         console.error(err);
+      } finally {
+        setIsProcessingOutbound(false);
       }
     },
-    [outboundQueue, petugas, expectedOutboundMat, expectedOutboundQty, noDokumen, triggerSound]
+    [petugas, expectedOutboundMat, noDokumen, triggerSound, promptOutboundGoogleSheetsSync]
   );
 
-  const handleCommitOutbound = async () => {
-    if (outboundQueue.length === 0) {
-      triggerSound('error');
-      setInlineBanner({
-        type: 'error',
-        title: 'Daftar Scan Material Keluar Kosong',
-        message:
-          'Silakan lakukan scan barcode Serial Number (SN) material yang akan dikeluarkan terlebih dahulu.',
-      });
-      return;
-    }
-
-    setIsProcessingOutbound(true);
-    try {
-      const res = await fetch('/api/scan/outbound', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          snList: outboundQueue.map((r) => r.snMaterial),
-          expectedCount: expectedOutboundQty,
-          expectedNoMaterial: expectedOutboundMat,
-          petugas,
-          noDokumen,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.logs) setLogs(data.logs);
-
-      if (!res.ok || !data.success) {
-        triggerSound('error');
-        const isMismatch = data.errorType === 'QUANTITY_MISMATCH';
-
-        setInlineBanner({
-          type: 'error',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
-        });
-
-        setSystemAlert({
-          isOpen: true,
-          severity: isMismatch ? 'error-mismatch' : 'error-duplicate',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
-          mismatchDetails: data.details,
-        });
-        return;
-      }
-
-      triggerSound('commit');
-      setRows(data.rows || []);
-      if (Array.isArray(data.eksekusiMimsRows)) {
-        setEksekusiMimsRows(data.eksekusiMimsRows);
-      }
-      setOutboundQueue([]);
-      setInlineBanner({
-        type: 'success',
-        title: 'Material Keluar & Sheet "EKSEKUSI_MIMS" Diperbarui Otomatis!',
-        message: data.message,
-      });
-      setSystemAlert({
-        isOpen: true,
-        severity: 'success',
-        title: 'Kolom O → STOK TERPAKAI & Masuk ke Sheet "EKSEKUSI_MIMS"',
-        message: data.message,
-      });
-      if (Array.isArray(data.updatedRows) && data.updatedRows.length > 0) {
-        promptOutboundGoogleSheetsSync(data.updatedRows, data.addedMimsRows || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsProcessingOutbound(false);
-    }
-  };
-
   // ============================================================================
-  // 2. HANDLER SCAN BARCODE MATERIAL MASUK (INBOUND)
+  // 2. HANDLER SCAN QR MATERIAL MASUK (INBOUND)
+  // Membuat baris data baru melanjutkan yang sudah ada pada Sheet "MATERIAL_MASUK"
+  // dan pada kolom keterangan berstatus "STOK SIAP"
   // ============================================================================
   const handleScanInboundSN = useCallback(
     async (rawSN: string) => {
@@ -713,13 +678,13 @@ export default function App() {
           triggerSound('error');
           setInlineBanner({
             type: 'error',
-            title: data.title || 'Peringatan: Barcode Sudah Pernah Di-scan!',
+            title: data.title || 'Peringatan: QR Code Sudah Pernah Di-scan!',
             message: data.message,
           });
           setSystemAlert({
             isOpen: true,
             severity: 'error-duplicate',
-            title: data.title || 'Peringatan: Barcode Sudah Pernah Di-scan!',
+            title: data.title || 'Peringatan: QR Code Sudah Pernah Di-scan!',
             message: data.message,
             snMaterial: cleanedSN,
             existingRow: data.existingRow,
@@ -777,8 +742,8 @@ export default function App() {
           const addedRow = commitData.addedRows?.[0];
           setInlineBanner({
             type: 'success',
-            title: `Baris Baru #${addedRow?.rowNumber || ''} Ditambahkan ke Sheet "MATERIAL"`,
-            message: `SN ${cleanedSN} (${newItem.noMaterial}) otomatis masuk ke Spreadsheet dengan keterangan Kolom O = "SIAP PAKAI".`,
+            title: `Baris Baru #${addedRow?.rowNumber || ''} Ditambahkan ke Sheet "MATERIAL_MASUK"`,
+            message: `QR Code ${cleanedSN} (${newItem.noMaterial}) berhasil membuat baris baru melanjutkan Sheet "MATERIAL_MASUK" dengan status keterangan = "STOK SIAP".`,
           });
           if (Array.isArray(commitData.addedRows) && commitData.addedRows.length > 0) {
             promptInboundGoogleSheetsSync(commitData.addedRows);
@@ -788,8 +753,8 @@ export default function App() {
           setInboundQueue((prev) => [...prev, newItem]);
           setInlineBanner({
             type: 'success',
-            title: 'Barcode Material Masuk Valid',
-            message: `SN ${cleanedSN} ditambahkan ke antrean masuk (Siap disimpan ke baris baru Sheet "MATERIAL" dengan Kolom O = SIAP PAKAI).`,
+            title: 'QR Code Material Masuk Valid',
+            message: `SN ${cleanedSN} ditambahkan ke antrean masuk (Siap disimpan melanjutkan baris Sheet "MATERIAL_MASUK" dengan status = STOK SIAP).`,
           });
         }
       } catch (err) {
@@ -832,7 +797,7 @@ export default function App() {
         setSystemAlert({
           isOpen: true,
           severity: 'error-duplicate',
-          title: data.title || 'Peringatan Barcode Duplikat',
+          title: data.title || 'Peringatan QR Code Duplikat',
           message: data.message,
           duplicatesList: data.duplicates,
         });
@@ -844,13 +809,13 @@ export default function App() {
       setInboundQueue([]);
       setInlineBanner({
         type: 'success',
-        title: 'Material Masuk Berhasil Ditambahkan ke Spreadsheet!',
+        title: 'Material Masuk Berhasil Ditambahkan ke Sheet "MATERIAL_MASUK"!',
         message: data.message,
       });
       setSystemAlert({
         isOpen: true,
         severity: 'success',
-        title: 'Baris Baru Ditambahkan (Kolom O: SIAP PAKAI)',
+        title: 'Baris Baru Ditambahkan (Status: STOK SIAP)',
         message: data.message,
       });
       if (Array.isArray(data.addedRows) && data.addedRows.length > 0) {
@@ -864,110 +829,13 @@ export default function App() {
   };
 
   // ============================================================================
-  // 3. SIMULASI SCAN CEPAT
-  // ============================================================================
-  const simulateValidOutboundScan = () => {
-    const queuedSet = new Set(outboundQueue.map((r) => r.snMaterial));
-    const available = rows.find(
-      (r) =>
-        r.status === 'SIAP PAKAI' &&
-        !queuedSet.has(r.snMaterial) &&
-        (expectedOutboundMat === 'ALL' || r.noMaterial === expectedOutboundMat)
-    );
-    if (!available) {
-      triggerSound('error');
-      setInlineBanner({
-        type: 'warning',
-        title: 'Stok Siap Pakai Tidak Tersedia untuk Filter Ini',
-        message: 'Tidak ada baris dengan status SIAP PAKAI yang belum di-scan pada filter ini.',
-      });
-      return;
-    }
-    handleScanOutboundSN(available.snMaterial);
-  };
-
-  const simulateDuplicateScan = (mode: 'KELUAR' | 'MASUK') => {
-    if (mode === 'KELUAR') {
-      if (outboundQueue.length > 0) {
-        handleScanOutboundSN(outboundQueue[0].snMaterial);
-        return;
-      }
-      const alreadyUsed = rows.find((r) => r.status === 'STOK TERPAKAI');
-      if (alreadyUsed) {
-        handleScanOutboundSN(alreadyUsed.snMaterial);
-        return;
-      }
-      const firstAvail = rows[0];
-      if (firstAvail) {
-        setOutboundQueue([firstAvail]);
-        setTimeout(() => {
-          handleScanOutboundSN(firstAvail.snMaterial);
-        }, 80);
-      }
-    } else {
-      const existingRow = rows[0];
-      if (existingRow) {
-        handleScanInboundSN(existingRow.snMaterial);
-      }
-    }
-  };
-
-  const simulateMismatchOutbound = async () => {
-    let currentQueue = [...outboundQueue];
-    if (currentQueue.length === 0 && rows.length > 0) {
-      const avail = rows.find((r) => r.status === 'SIAP PAKAI') || rows[0];
-      currentQueue = [avail];
-      setOutboundQueue(currentQueue);
-    }
-    const targetToTest = currentQueue.length === 3 ? 5 : 3;
-    setExpectedOutboundQty(targetToTest);
-
-    const res = await fetch('/api/scan/outbound', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        snList: currentQueue.map((r) => r.snMaterial),
-        expectedCount: targetToTest,
-        expectedNoMaterial: expectedOutboundMat,
-        petugas,
-        noDokumen,
-      }),
-    });
-    const data = await res.json();
-    if (data.stats) setStats(data.stats);
-    if (data.logs) setLogs(data.logs);
-
-    triggerSound('error');
-    setInlineBanner({
-      type: 'error',
-      title: data.title || 'Peringatan Error: Ketidakcocokan Jumlah Material Keluar!',
-      message: data.message,
-    });
-    setSystemAlert({
-      isOpen: true,
-      severity: 'error-mismatch',
-      title: data.title || 'Peringatan Error: Ketidakcocokan Jumlah Material Keluar!',
-      message: data.message,
-      mismatchDetails: data.details,
-    });
-  };
-
-  const simulateValidInboundNewSN = () => {
-    const matNo = selectedInboundMat || '2190224';
-    const suffix = matNo.slice(-3);
-    const random9 = String(Math.floor(100000000 + Math.random() * 899999999));
-    const generatedSN = `PLN02190000${suffix}02639${random9}`;
-    handleScanInboundSN(generatedSN);
-  };
-
-  // ============================================================================
-  // 4. FILTERED SPREADSHEET ROWS & PAGINATION
+  // 3. FILTERED SPREADSHEET ROWS & PAGINATION
   // ============================================================================
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toUpperCase();
     return rows.filter((r) => {
-      if (statusFilter === 'SIAP PAKAI' && r.status !== 'SIAP PAKAI') return false;
-      if (statusFilter === 'STOK TERPAKAI' && r.status !== 'STOK TERPAKAI') return false;
+      if (statusFilter === 'STOK SIAP' && r.status !== 'STOK SIAP') return false;
+      if (statusFilter === 'TERPAKAI' && r.status !== 'TERPAKAI') return false;
       if (statusFilter === 'BARU_MASUK' && r.lastScanType !== 'MASUK') return false;
       if (materialFilter !== 'ALL' && r.noMaterial !== materialFilter) return false;
       if (!q) return true;
@@ -991,14 +859,19 @@ export default function App() {
     setCurrentPage(1);
   }, [searchQuery, statusFilter, materialFilter]);
 
-  const isQuantityMatched =
-    outboundQueue.length === expectedOutboundQty && expectedOutboundQty > 0;
+  const terpakaiRows = useMemo(
+    () =>
+      rows
+        .filter((r) => r.status === 'TERPAKAI')
+        .slice()
+        .reverse(),
+    [rows]
+  );
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* =====================================================================
           TOP BAR CONTRACT: 3 Zones separated by gap-8
-          Compact 52px height on mobile to obey 15% sticky surface cap
       ====================================================================== */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 h-13 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
         {/* Zone 1: Single text element wordmark */}
@@ -1046,7 +919,7 @@ export default function App() {
                 : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            Sheet MATERIAL
+            Sheet MATERIAL_MASUK
           </button>
           <button
             type="button"
@@ -1088,14 +961,10 @@ export default function App() {
                 <span>ULP SINJAI</span>
                 <span aria-hidden="true">·</span>
                 <span>Gd ULP Sinjai (7417 / 2500)</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">
-                  Sheet: MATERIAL (GID=0)
-                </span>
               </div>
               <div className="flex items-center justify-between gap-2 mt-1">
                 <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-slate-900 dark:text-white font-display">
-                  Monitoring Stok &amp; Scan Barcode SN
+                  Monitoring Stok &amp; Scan QR Code SN
                 </h1>
                 <div className="flex items-center gap-1.5 md:hidden shrink-0">
                   <PWAInstallButton />
@@ -1154,7 +1023,7 @@ export default function App() {
                   }`}
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5 text-sky-600" />
-                  <span>Tabel Spreadsheet ({rows.length})</span>
+                  <span>MATERIAL_MASUK ({rows.length})</span>
                 </button>
                 <button
                   type="button"
@@ -1194,7 +1063,7 @@ export default function App() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
             <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
               <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Total Baris Sheet
+                Total Baris MATERIAL_MASUK
               </div>
               <div className="mt-1 flex items-baseline justify-between gap-1">
                 <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
@@ -1208,13 +1077,13 @@ export default function App() {
 
             <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
               <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Kolom O: SIAP PAKAI
+                Status: STOK SIAP
               </div>
               <div className="mt-1 flex items-baseline justify-between gap-1">
                 <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
                   {stats
                     ? stats.siapPakaiCount.toLocaleString('id-ID')
-                    : rows.filter((r) => r.status === 'SIAP PAKAI').length}
+                    : rows.filter((r) => r.status === 'STOK SIAP').length}
                 </span>
                 <span className="text-[11px] text-slate-500 truncate">Tersedia</span>
               </div>
@@ -1222,13 +1091,13 @@ export default function App() {
 
             <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
               <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Kolom O: STOK TERPAKAI
+                Status: TERPAKAI
               </div>
               <div className="mt-1 flex items-baseline justify-between gap-1">
                 <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
                   {stats
                     ? stats.stokTerpakaiCount.toLocaleString('id-ID')
-                    : rows.filter((r) => r.status === 'STOK TERPAKAI').length}
+                    : rows.filter((r) => r.status === 'TERPAKAI').length}
                 </span>
                 <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
                   {stats?.outboundUsedCount || 0} keluar
@@ -1238,14 +1107,14 @@ export default function App() {
 
             <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
               <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Alert Duplikat &amp; Selisih
+                Notifikasi Duplikat QR
               </div>
               <div className="mt-1 flex items-baseline justify-between gap-1">
                 <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-red-600 dark:text-red-400">
-                  {(stats?.duplicateAlertCount || 0) + (stats?.mismatchAlertCount || 0)}
+                  {stats?.duplicateAlertCount || 0}
                 </span>
                 <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
-                  {stats?.duplicateAlertCount || 0} dup · {stats?.mismatchAlertCount || 0} jml
+                  Peringatan
                 </span>
               </div>
             </div>
@@ -1267,10 +1136,10 @@ export default function App() {
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                   {connectedSheet
-                    ? 'Setiap scan Material Masuk (SIAP PAKAI) dan Keluar (STOK TERPAKAI) dapat diperbarui langsung ke Google Sheets.'
+                    ? 'Setiap scan QR Material Masuk (STOK SIAP) dan Keluar (TERPAKAI) dapat diperbarui langsung ke Google Sheets.'
                     : googleUser && accessToken && !needsAuth
-                    ? 'Pilih file Spreadsheet dari Google Drive atau buat Sheet "MATERIAL" (GID=0) baru.'
-                    : 'Masuk dengan Google untuk menghubungkan Sheet "MATERIAL" (GID=0) di akun Google Sheets Anda.'}
+                    ? 'Pilih file Spreadsheet dari Google Drive atau buat Sheet "MATERIAL_MASUK" baru.'
+                    : 'Masuk dengan Google untuk menghubungkan Sheet "MATERIAL_MASUK" di akun Google Sheets Anda.'}
                 </p>
               </div>
             </div>
@@ -1386,13 +1255,14 @@ export default function App() {
         )}
 
         {/* ===================================================================
-            SECTION 1: SCAN MATERIAL KELUAR (OUTBOUND)
-            Mobile-first ergonomics with 48px Camera Trigger, tactile +/- stepper,
-            and mobile card queue
+            SECTION 1: SCAN QR MATERIAL KELUAR (OUTBOUND)
+            Menyesuaikan data pada Sheet "MATERIAL_MASUK".
+            Jika masih berstatus "STOK SIAP" -> proses dilanjutkan dan status
+            berubah dari "STOK SIAP" menjadi "TERPAKAI".
         ==================================================================== */}
         {activeSection === 'keluar' && (
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Left Column: Barcode Scanner Input & Quantity Control (5 cols) */}
+            {/* Left Column: QR Code Scanner Input (5 cols) */}
             <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
               <div className="flex items-start justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div>
@@ -1400,12 +1270,8 @@ export default function App() {
                     Pengeluaran Stok Gudang
                   </div>
                   <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                    Scan Barcode Material Keluar
+                    Scan QR Material Keluar
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Otomatis memperbarui <strong className="text-slate-800 dark:text-slate-200">Kolom O</strong> menjadi{' '}
-                    <strong className="text-amber-700 dark:text-amber-400">STOK TERPAKAI</strong>.
-                  </p>
                 </div>
 
                 {/* Mobile toggle for Officer/Bon fields */}
@@ -1431,10 +1297,10 @@ export default function App() {
                 className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
               >
                 <Camera className="w-5 h-5" />
-                <span>Buka Kamera Scan Barcode SN</span>
+                <span>Buka Kamera Scan QR Material Keluar</span>
               </button>
 
-              {/* Barcode Scanner Input Box */}
+              {/* QR Code Scanner Input Box */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -1443,117 +1309,55 @@ export default function App() {
                 className="space-y-2"
               >
                 <label
-                  htmlFor="outbound-barcode-input"
+                  htmlFor="outbound-qr-input"
                   className="block text-xs font-bold text-slate-900 dark:text-white"
                 >
-                  Input / Scanner Barcode (SN MATERIAL — Kolom B)
+                  Input / Scanner QR Code Material Keluar
                 </label>
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1 min-w-0">
-                    <ScanBarcode className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <QrCode className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
                       ref={outboundInputRef}
-                      id="outbound-barcode-input"
+                      id="outbound-qr-input"
                       type="text"
                       value={outboundScanInput}
                       onChange={(e) => setOutboundScanInput(e.target.value)}
-                      placeholder="PLN0219000022402639..."
+                      placeholder="PLN0219000022402639005330251"
                       className="w-full min-h-[46px] pl-10 pr-3 py-2.5 text-xs sm:text-sm font-mono bg-slate-50 dark:bg-slate-950 border-2 border-sky-600/80 dark:border-sky-500 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                   </div>
                   <button
                     type="submit"
+                    disabled={isProcessingOutbound}
                     className="min-h-[46px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 rounded-xl transition-colors whitespace-nowrap shrink-0"
                   >
-                    Scan SN
+                    Scan QR
                   </button>
                 </div>
               </form>
 
-              {/* Tactile Target Quantity Stepper + Presets */}
-              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <label
-                    htmlFor="outbound-target-qty"
-                    className="text-xs font-bold text-slate-800 dark:text-slate-200"
-                  >
-                    Target Jumlah Material Keluar
-                  </label>
-                  <span className="text-[11px] font-mono text-slate-500">
-                    Wajib cocok saat proses
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setExpectedOutboundQty((q) => Math.max(1, q - 1))}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 active:scale-95 transition-transform"
-                    aria-label="Kurangi target jumlah"
-                  >
-                    <Minus className="w-4 h-4" />
-                  </button>
-                  <input
-                    id="outbound-target-qty"
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={expectedOutboundQty}
-                    onChange={(e) =>
-                      setExpectedOutboundQty(Math.max(1, parseInt(e.target.value || '1', 10)))
-                    }
-                    className="flex-1 min-h-[44px] text-center px-3 py-2 text-base font-mono font-bold tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setExpectedOutboundQty((q) => q + 1)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 active:scale-95 transition-transform"
-                    aria-label="Tambah target jumlah"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Preset Qty Buttons */}
-                <div className="grid grid-cols-5 gap-1.5">
-                  {[1, 2, 3, 5, 10].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setExpectedOutboundQty(preset)}
-                      className={`min-h-[38px] py-1.5 text-xs font-mono font-semibold rounded-lg border transition-colors ${
-                        expectedOutboundQty === preset
-                          ? 'bg-slate-900 text-white border-slate-900 dark:bg-sky-600 dark:border-sky-600'
-                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      {preset} Unit
-                    </button>
+              {/* Filter No Material */}
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2">
+                <label
+                  htmlFor="outbound-mat-filter"
+                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                >
+                  Filter No. Material
+                </label>
+                <select
+                  id="outbound-mat-filter"
+                  value={expectedOutboundMat}
+                  onChange={(e) => setExpectedOutboundMat(e.target.value)}
+                  className="w-full min-h-[42px] px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                >
+                  <option value="ALL">Semua No. Material</option>
+                  {catalog.map((c) => (
+                    <option key={c.noMaterial} value={c.noMaterial}>
+                      {c.noMaterial} — {c.spesifikasi.slice(0, 28)}
+                    </option>
                   ))}
-                </div>
-
-                {/* Filter No Material */}
-                <div className="pt-1">
-                  <label
-                    htmlFor="outbound-mat-filter"
-                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
-                  >
-                    Filter No. Material (Kolom C)
-                  </label>
-                  <select
-                    id="outbound-mat-filter"
-                    value={expectedOutboundMat}
-                    onChange={(e) => setExpectedOutboundMat(e.target.value)}
-                    className="w-full min-h-[42px] px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  >
-                    <option value="ALL">Semua No. Material</option>
-                    {catalog.map((c) => (
-                      <option key={c.noMaterial} value={c.noMaterial}>
-                        {c.noMaterial} — {c.spesifikasi.slice(0, 28)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                </select>
               </div>
 
               {/* Officer & Bon Number (Always visible on sm+, toggleable on mobile) */}
@@ -1585,129 +1389,56 @@ export default function App() {
                   />
                 </div>
               </div>
-
-              {/* Quick Simulation / Testing Controls (Touch-friendly grid on mobile) */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  Simulasi Scan &amp; Uji Notifikasi Error:
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={simulateValidOutboundScan}
-                    className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl transition-colors"
-                  >
-                    + Scan 1 SN Siap Pakai
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => simulateDuplicateScan('KELUAR')}
-                    className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-xl transition-colors"
-                  >
-                    Uji Barcode Duplikat
-                  </button>
-                  <button
-                    type="button"
-                    onClick={simulateMismatchOutbound}
-                    className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-red-50 hover:bg-red-100 dark:bg-red-950/60 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl transition-colors"
-                  >
-                    Uji Error Selisih Jumlah
-                  </button>
-                </div>
-              </div>
             </div>
 
-            {/* Right Column: Outbound Scan Session Queue & Quantity Verification (7 cols) */}
+            {/* Right Column: Data Material Keluar (Menyesuaikan Data pada MATERIAL_MASUK) */}
             <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white font-display">
-                    Verifikasi Jumlah &amp; Antrean Scan Keluar
+                    Daftar Material Keluar (Status: TERPAKAI)
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Validasi kecocokan jumlah barcode yang di-scan terhadap Target Jumlah Keluar.
+                    Hasil scan QR menyesuaikan data pada Sheet{' '}
+                    <code className="font-mono font-semibold">MATERIAL_MASUK</code> (STOK SIAP →
+                    TERPAKAI).
                   </p>
                 </div>
-
-                {/* Live Counter Comparison Box */}
-                <div
-                  className={`px-3.5 py-2.5 rounded-xl border text-xs font-mono tabular-nums flex items-center justify-between sm:justify-start gap-3 ${
-                    outboundQueue.length === 0
-                      ? 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
-                      : isQuantityMatched
-                      ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
-                      : 'bg-red-50 dark:bg-red-950/50 border-red-300 dark:border-red-800 text-red-900 dark:text-red-200'
-                  }`}
-                >
-                  <div>
-                    <span className="text-[11px] block opacity-75">Di-scan / Target</span>
-                    <span className="text-base font-bold">
-                      {outboundQueue.length} / {expectedOutboundQty} Unit
-                    </span>
-                  </div>
-                  <div className="h-7 w-px bg-current opacity-20" />
-                  <div className="font-sans font-semibold text-right sm:text-left">
-                    {outboundQueue.length === 0
-                      ? 'Menunggu Scan'
-                      : isQuantityMatched
-                      ? 'Jumlah Cocok'
-                      : outboundQueue.length < expectedOutboundQty
-                      ? `Kurang ${expectedOutboundQty - outboundQueue.length} Unit`
-                      : `Lebih +${outboundQueue.length - expectedOutboundQty} Unit`}
-                  </div>
-                </div>
+                <span className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-xs font-mono font-bold text-amber-800 dark:text-amber-300 whitespace-nowrap">
+                  {terpakaiRows.length} Unit TERPAKAI
+                </span>
               </div>
 
-              {/* Real-time Mismatch Warning Box */}
-              {outboundQueue.length > 0 && !isQuantityMatched && (
-                <div className="p-3.5 rounded-xl bg-red-50/80 dark:bg-red-950/40 border border-red-200 dark:border-red-800/80 flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                  <div className="text-xs text-red-900 dark:text-red-200 leading-relaxed">
-                    <span className="font-bold block">
-                      Peringatan Ketidakcocokan Jumlah Material Keluar:
-                    </span>
-                    Target pengeluaran <strong>{expectedOutboundQty} unit</strong>, namun barcode SN
-                    yang di-scan saat ini <strong>{outboundQueue.length} unit</strong> (selisih{' '}
-                    {Math.abs(expectedOutboundQty - outboundQueue.length)} unit).
-                  </div>
-                </div>
-              )}
-
-              {/* Scanned Outbound Items: Mobile Cards (<768px) + Desktop Table (>=768px) */}
-              {outboundQueue.length === 0 ? (
-                <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
-                  <ScanBarcode className="w-9 h-9 text-slate-400 mx-auto stroke-1" />
+              {terpakaiRows.length === 0 ? (
+                <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
+                  <QrCode className="w-9 h-9 text-slate-400 mx-auto stroke-1" />
                   <div className="space-y-1 max-w-md mx-auto">
                     <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                      Belum Ada Barcode Material Keluar yang Di-scan
+                      Belum Ada Material Keluar Tercatat
                     </p>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Gunakan kamera / scanner barcode atau ketuk tombol di bawah untuk simulasi scan
-                      1 SN dari Sheet MATERIAL.
+                      Scan QR Code material (contoh:{' '}
+                      <code className="font-mono">PLN0219000022402639005330251</code>). Jika pada
+                      Sheet <code className="font-mono">MATERIAL_MASUK</code> masih berstatus{' '}
+                      <strong>STOK SIAP</strong>, proses dilanjutkan dan status berubah menjadi{' '}
+                      <strong>TERPAKAI</strong>.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={simulateValidOutboundScan}
-                    className="min-h-[44px] px-4 py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 rounded-xl transition-colors"
-                  >
-                    + Simulasi Scan 1 Material Siap Pakai
-                  </button>
                 </div>
               ) : (
                 <>
-                  {/* MOBILE CARD LIST FOR OUTBOUND QUEUE */}
+                  {/* MOBILE CARD LIST FOR OUTBOUND RECORDED ITEMS */}
                   <div className="md:hidden space-y-2.5">
-                    {outboundQueue.map((item, idx) => (
+                    {terpakaiRows.slice(0, 12).map((item) => (
                       <div
                         key={item.snMaterial}
-                        className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3"
+                        className="p-3.5 rounded-xl bg-amber-50/40 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/70 flex items-center justify-between gap-3"
                       >
                         <div className="min-w-0 space-y-1">
                           <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
-                            <span>Urutan #{idx + 1}</span>
+                            <span>MATERIAL_MASUK Baris #{item.rowNumber}</span>
                             <span>·</span>
-                            <span>Baris Sheet #{item.rowNumber}</span>
+                            <span>{item.tanggalHistory}</span>
                           </div>
                           <div className="font-mono font-bold text-xs sm:text-sm text-slate-900 dark:text-white break-all tabular-nums">
                             {item.snMaterial}
@@ -1718,54 +1449,41 @@ export default function App() {
                           </div>
                           <div className="text-[11px] font-mono pt-0.5">
                             <span className="text-emerald-700 dark:text-emerald-400">
-                              SIAP PAKAI
+                              STOK SIAP
                             </span>
                             <span className="mx-1.5 text-slate-400">→</span>
                             <span className="font-bold text-amber-700 dark:text-amber-400">
-                              STOK TERPAKAI
+                              {item.status}
                             </span>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setOutboundQueue((prev) =>
-                              prev.filter((r) => r.snMaterial !== item.snMaterial)
-                            )
-                          }
-                          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-400 hover:text-red-600 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shrink-0"
-                          aria-label="Hapus item"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </div>
                     ))}
                   </div>
 
-                  {/* DESKTOP TABLE FOR OUTBOUND QUEUE */}
+                  {/* DESKTOP TABLE FOR OUTBOUND RECORDED ITEMS */}
                   <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                          <th className="py-2.5 px-3">No</th>
-                          <th className="py-2.5 px-3">Baris Sheet</th>
-                          <th className="py-2.5 px-3">Kolom B: SN MATERIAL</th>
-                          <th className="py-2.5 px-3">Kolom C &amp; D: Material</th>
-                          <th className="py-2.5 px-3">Perubahan Kolom O</th>
-                          <th className="py-2.5 px-3 text-right">Aksi</th>
+                          <th className="py-2.5 px-3">Baris MATERIAL_MASUK</th>
+                          <th className="py-2.5 px-3">Waktu Keluar</th>
+                          <th className="py-2.5 px-3">SN MATERIAL (QR Code)</th>
+                          <th className="py-2.5 px-3">Material &amp; Spesifikasi</th>
+                          <th className="py-2.5 px-3">Perubahan Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
-                        {outboundQueue.map((item, idx) => (
+                        {terpakaiRows.slice(0, 12).map((item) => (
                           <tr
                             key={item.snMaterial}
                             className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                           >
-                            <td className="py-2.5 px-3 font-mono tabular-nums text-slate-500">
-                              {idx + 1}
-                            </td>
                             <td className="py-2.5 px-3 font-mono tabular-nums font-semibold text-slate-700 dark:text-slate-300">
                               #{item.rowNumber}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-slate-500 whitespace-nowrap">
+                              {item.tanggalHistory}
                             </td>
                             <td className="py-2.5 px-3 font-mono tabular-nums font-bold text-slate-900 dark:text-white">
                               {item.snMaterial}
@@ -1779,28 +1497,14 @@ export default function App() {
                                 {item.spesifikasi}
                               </span>
                             </td>
-                            <td className="py-2.5 px-3 font-mono text-[11px]">
+                            <td className="py-2.5 px-3 font-mono text-[11px] whitespace-nowrap">
                               <span className="text-emerald-700 dark:text-emerald-400">
-                                SIAP PAKAI
+                                STOK SIAP
                               </span>
                               <span className="mx-1.5 text-slate-400">→</span>
                               <span className="font-bold text-amber-700 dark:text-amber-400">
-                                STOK TERPAKAI
+                                {item.status}
                               </span>
-                            </td>
-                            <td className="py-2.5 px-3 text-right">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setOutboundQueue((prev) =>
-                                    prev.filter((r) => r.snMaterial !== item.snMaterial)
-                                  )
-                                }
-                                className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors"
-                                title="Hapus dari daftar scan keluar"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
                             </td>
                           </tr>
                         ))}
@@ -1809,136 +1513,31 @@ export default function App() {
                   </div>
                 </>
               )}
-
-              {/* Outbound Commit Actions (Full-width 48px buttons on mobile) */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-2">
-                <div className="flex items-center gap-2">
-                  {outboundQueue.length > 0 && !isQuantityMatched && (
-                    <button
-                      type="button"
-                      onClick={() => setExpectedOutboundQty(outboundQueue.length)}
-                      className="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors whitespace-nowrap"
-                    >
-                      Samakan Target ({outboundQueue.length} Unit)
-                    </button>
-                  )}
-                  {outboundQueue.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setOutboundQueue([])}
-                      className="min-h-[44px] px-3.5 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 rounded-xl transition-colors whitespace-nowrap"
-                    >
-                      Reset Antrean
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleCommitOutbound}
-                  disabled={isProcessingOutbound}
-                  className={`min-h-[48px] px-5 py-3 text-xs sm:text-sm font-bold text-white rounded-xl transition-all active:scale-[0.99] flex items-center justify-center gap-2 whitespace-nowrap ${
-                    isQuantityMatched
-                      ? 'bg-amber-600 hover:bg-amber-700 shadow-sm'
-                      : 'bg-slate-900 hover:bg-slate-800 dark:bg-slate-700'
-                  }`}
-                >
-                  <ArrowUpRight className="w-4 h-4 shrink-0" />
-                  <span>Proses Keluar &amp; Masuk ke Sheet EKSEKUSI_MIMS</span>
-                </button>
-              </div>
-
-              {/* Automatic Sheet "EKSEKUSI_MIMS" Format & Timestamp Preview Card */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
-                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>
-                      Otomasi Sheet &quot;EKSEKUSI_MIMS&quot; ({eksekusiMimsRows.length} Baris
-                      Tercatat)
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveSpreadsheetTab('EKSEKUSI_MIMS');
-                      setActiveSection('spreadsheet');
-                    }}
-                    className="text-xs font-semibold text-sky-600 dark:text-sky-400 hover:underline flex items-center gap-1"
-                  >
-                    <span>Lihat Tabel Sheet EKSEKUSI_MIMS</span>
-                    <ArrowUpRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Setiap material yang dikeluarkan otomatis membentuk baris baru pada Sheet{' '}
-                  <code className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                    EKSEKUSI_MIMS
-                  </code>{' '}
-                  dengan format: <strong>Kolom A = TIMESTAMP EKSEKUSI (YYYY-MM-DD HH:mm:ss)</strong>
-                  , <strong>Kolom B = SN MATERIAL</strong>, <strong>Kolom C–N = Data Material</strong>
-                  , <strong>Kolom O = STOK TERPAKAI</strong>,{' '}
-                  <strong>Kolom P = NO DOKUMEN ({noDokumen})</strong>, dan{' '}
-                  <strong>Kolom Q = PETUGAS ({petugas})</strong>.
-                </p>
-
-                {eksekusiMimsRows.length > 0 && (
-                  <div className="p-3 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-800/60 space-y-1.5">
-                    <div className="text-[11px] font-semibold text-amber-900 dark:text-amber-300">
-                      Baris Terakhir Masuk ke Sheet &quot;EKSEKUSI_MIMS&quot;:
-                    </div>
-                    {eksekusiMimsRows
-                      .slice(-2)
-                      .reverse()
-                      .map((m) => (
-                        <div
-                          key={`${m.mimsRowNumber}-${m.snMaterial}`}
-                          className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono bg-white dark:bg-slate-900 p-2 rounded-lg border border-amber-200/60 dark:border-slate-800"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-bold text-amber-700 dark:text-amber-400">
-                              #{m.mimsRowNumber}
-                            </span>
-                            <span className="text-slate-500 tabular-nums">
-                              [{m.timestampEksekusi}]
-                            </span>
-                            <span className="font-bold text-slate-900 dark:text-white truncate">
-                              {m.snMaterial}
-                            </span>
-                          </div>
-                          <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400">
-                            {m.noMaterial} · {m.status}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
             </div>
           </section>
         )}
 
         {/* ===================================================================
-            SECTION 2: SCAN MATERIAL MASUK (INBOUND)
-            Appends new row to Sheet "MATERIAL" with Column O = "SIAP PAKAI"
+            SECTION 2: SCAN QR MATERIAL MASUK (INBOUND)
+            Membuat baris data baru melanjutkan yang sudah ada pada Sheet
+            "MATERIAL_MASUK" dengan status keterangan "STOK SIAP"
         ==================================================================== */}
         {activeSection === 'masuk' && (
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Left Column: Inbound Scanner Form (5 cols) */}
+            {/* Left Column: Inbound QR Scanner Form (5 cols) */}
             <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
               <div className="border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                   Penerimaan Stok Gudang
                 </div>
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                  Scan Barcode Material Masuk
+                  Scan QR Material Masuk
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                  Menambah baris baru pada Sheet <code className="font-mono">MATERIAL</code> dengan{' '}
-                  <strong className="text-emerald-700 dark:text-emerald-400">
-                    Kolom O = SIAP PAKAI
-                  </strong>
-                  .
+                  Membuat baris data baru melanjutkan yang sudah ada pada Sheet{' '}
+                  <code className="font-mono font-bold">MATERIAL_MASUK</code> dengan keterangan
+                  berstatus{' '}
+                  <strong className="text-emerald-700 dark:text-emerald-400">STOK SIAP</strong>.
                 </p>
               </div>
 
@@ -1949,10 +1548,10 @@ export default function App() {
                 className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
               >
                 <Camera className="w-5 h-5" />
-                <span>Buka Kamera Scan Material Masuk</span>
+                <span>Buka Kamera Scan QR Material Masuk</span>
               </button>
 
-              {/* Inbound Barcode Input */}
+              {/* Inbound QR Code Input */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -1961,21 +1560,21 @@ export default function App() {
                 className="space-y-2"
               >
                 <label
-                  htmlFor="inbound-barcode-input"
+                  htmlFor="inbound-qr-input"
                   className="block text-xs font-bold text-slate-900 dark:text-white"
                 >
-                  Scan Barcode Material Masuk (SN MATERIAL — Kolom B)
+                  Scan QR Material Masuk
                 </label>
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1 min-w-0">
-                    <ScanBarcode className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <QrCode className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
                       ref={inboundInputRef}
-                      id="inbound-barcode-input"
+                      id="inbound-qr-input"
                       type="text"
                       value={inboundScanInput}
                       onChange={(e) => setInboundScanInput(e.target.value)}
-                      placeholder="PLN0219000022402639..."
+                      placeholder="PLN0219000022402639005330251"
                       className="w-full min-h-[46px] pl-10 pr-3 py-2.5 text-xs sm:text-sm font-mono bg-slate-50 dark:bg-slate-950 border-2 border-emerald-600/80 dark:border-emerald-500 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
@@ -1984,7 +1583,7 @@ export default function App() {
                     disabled={isProcessingInbound}
                     className="min-h-[46px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors whitespace-nowrap shrink-0"
                   >
-                    Tambah SN
+                    Tambah QR
                   </button>
                 </div>
               </form>
@@ -2031,11 +1630,11 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Status Kolom O
+                      Status Keterangan
                     </label>
                     <input
                       type="text"
-                      value="SIAP PAKAI"
+                      value="STOK SIAP"
                       disabled
                       className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl"
                     />
@@ -2072,44 +1671,20 @@ export default function App() {
                   </div>
                 </div>
               </div>
-
-              {/* Quick Simulation Buttons for Inbound */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  Simulasi Scan Material Masuk &amp; Uji Duplikat:
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={simulateValidInboundNewSN}
-                    className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Simulasi Scan SN Baru</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => simulateDuplicateScan('MASUK')}
-                    className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-xl transition-colors"
-                  >
-                    Uji Error SN Sudah Terdaftar
-                  </button>
-                </div>
-              </div>
             </div>
 
-            {/* Right Column: Newly Added Rows in Spreadsheet (7 cols) */}
+            {/* Right Column: Newly Added Rows in Sheet MATERIAL_MASUK (7 cols) */}
             <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white font-display">
                     {inboundAutoSave
-                      ? 'Baris Material Masuk Terbaru pada Sheet "MATERIAL"'
+                      ? 'Baris Material Masuk Terbaru pada Sheet "MATERIAL_MASUK"'
                       : `Antrean Material Masuk (${inboundQueue.length} Unit)`}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Menampilkan baris terakhir pada Sheet &quot;MATERIAL&quot; beserta status Kolom O
-                    = SIAP PAKAI.
+                    Menampilkan baris terakhir pada Sheet &quot;MATERIAL_MASUK&quot; beserta status
+                    keterangan = STOK SIAP.
                   </p>
                 </div>
                 {!inboundAutoSave && inboundQueue.length > 0 && (
@@ -2119,7 +1694,7 @@ export default function App() {
                     disabled={isProcessingInbound}
                     className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap"
                   >
-                    Simpan {inboundQueue.length} Baris ke Spreadsheet
+                    Simpan {inboundQueue.length} Baris ke MATERIAL_MASUK
                   </button>
                 )}
               </div>
@@ -2142,7 +1717,13 @@ export default function App() {
                         <span className="font-semibold text-slate-600 dark:text-slate-300">
                           Baris #{r.rowNumber} · {r.tanggalHistory}
                         </span>
-                        <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                        <span
+                          className={`font-bold ${
+                            r.status === 'TERPAKAI'
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-emerald-700 dark:text-emerald-400'
+                          }`}
+                        >
                           {r.status}
                         </span>
                       </div>
@@ -2164,9 +1745,9 @@ export default function App() {
                     <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                       <th className="py-2.5 px-3">Baris #</th>
                       <th className="py-2.5 px-3">Kolom A: TANGGAL HISTORY</th>
-                      <th className="py-2.5 px-3">Kolom B: SN MATERIAL</th>
+                      <th className="py-2.5 px-3">Kolom B: SN MATERIAL (QR)</th>
                       <th className="py-2.5 px-3">Kolom C &amp; D: Spesifikasi</th>
-                      <th className="py-2.5 px-3">Kolom O: STATUS</th>
+                      <th className="py-2.5 px-3">Keterangan / Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
@@ -2198,7 +1779,13 @@ export default function App() {
                               {r.spesifikasi}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                          <td
+                            className={`py-2.5 px-3 font-mono font-bold ${
+                              r.status === 'TERPAKAI'
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-emerald-700 dark:text-emerald-400'
+                            }`}
+                          >
                             {r.status}
                           </td>
                         </tr>
@@ -2259,10 +1846,10 @@ export default function App() {
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono mt-2 pt-1.5 border-t border-slate-200/70 dark:border-slate-700/60">
                       <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-                        Siap: {group.siapPakai}
+                        STOK SIAP: {group.siapPakai}
                       </span>
                       <span className="text-amber-700 dark:text-amber-400 font-semibold">
-                        Pakai: {group.stokTerpakai}
+                        TERPAKAI: {group.stokTerpakai}
                       </span>
                     </div>
                   </button>
@@ -2279,8 +1866,8 @@ export default function App() {
                     <th className="py-2 px-3">Kolom D: SPESIFIKASI</th>
                     <th className="py-2 px-3">Kolom F: KATEGORI</th>
                     <th className="py-2 px-3 text-right">Total Unit</th>
-                    <th className="py-2 px-3 text-right">Kolom O: SIAP PAKAI</th>
-                    <th className="py-2 px-3 text-right">Kolom O: STOK TERPAKAI</th>
+                    <th className="py-2 px-3 text-right">Status: STOK SIAP</th>
+                    <th className="py-2 px-3 text-right">Status: TERPAKAI</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
@@ -2327,27 +1914,27 @@ export default function App() {
 
         {/* ===================================================================
             SECTION 3: LIVE SPREADSHEET VIEW
-            Supports switching between Sheet 1: "MATERIAL" (GID=0) and
-            Sheet 2: "EKSEKUSI_MIMS" (Automatic Outbound Rows + Timestamp)
+            Supports switching between Sheet 1: "MATERIAL_MASUK" and
+            Sheet 2: "EKSEKUSI_MIMS"
         ==================================================================== */}
         {(activeSection === 'spreadsheet' ||
           activeSection === 'keluar' ||
           activeSection === 'masuk') && (
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
-            {/* Google Spreadsheet Sheet Tab Bar (Sheet 1: MATERIAL | Sheet 2: EKSEKUSI_MIMS) */}
+            {/* Google Spreadsheet Sheet Tab Bar */}
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
                 <button
                   type="button"
-                  onClick={() => setActiveSpreadsheetTab('MATERIAL')}
+                  onClick={() => setActiveSpreadsheetTab('MATERIAL_MASUK')}
                   className={`min-h-[42px] px-4 py-2 text-xs font-bold rounded-xl border transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
-                    activeSpreadsheetTab === 'MATERIAL'
+                    activeSpreadsheetTab === 'MATERIAL_MASUK'
                       ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
                   }`}
                 >
                   <FileSpreadsheet className="w-4 h-4" />
-                  <span>Sheet 1: MATERIAL (GID=0)</span>
+                  <span>Sheet: MATERIAL_MASUK</span>
                   <span className="font-mono text-[11px] opacity-90 tabular-nums">
                     ({rows.length})
                   </span>
@@ -2363,7 +1950,7 @@ export default function App() {
                   }`}
                 >
                   <Clock className="w-4 h-4" />
-                  <span>Sheet 2: EKSEKUSI_MIMS</span>
+                  <span>Sheet: EKSEKUSI_MIMS</span>
                   <span className="font-mono text-[11px] opacity-90 tabular-nums">
                     ({eksekusiMimsRows.length} Keluar)
                   </span>
@@ -2371,15 +1958,15 @@ export default function App() {
               </div>
 
               <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                {activeSpreadsheetTab === 'MATERIAL'
-                  ? 'Stok Gudang Utama (Kolom A – O)'
-                  : 'Otomatis Material Keluar + Timestamp (Kolom A – R)'}
+                {activeSpreadsheetTab === 'MATERIAL_MASUK'
+                  ? 'Data Material Masuk & Status (STOK SIAP / TERPAKAI)'
+                  : 'Data Material Keluar (TERPAKAI)'}
               </div>
             </div>
 
             {activeSpreadsheetTab === 'EKSEKUSI_MIMS' ? (
               /* ===============================================================
-                 SHEET 2: "EKSEKUSI_MIMS" (AUTOMATIC OUTBOUND + TIMESTAMP)
+                 SHEET 2: "EKSEKUSI_MIMS"
               ================================================================ */
               <div className="space-y-4">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
@@ -2389,17 +1976,12 @@ export default function App() {
                       <span className="font-mono font-bold">Sheet: &quot;EKSEKUSI_MIMS&quot;</span>
                       <span aria-hidden="true">·</span>
                       <span className="font-mono tabular-nums">
-                        {eksekusiMimsRows.length} baris tercatat otomatis
+                        {eksekusiMimsRows.length} baris tercatat
                       </span>
                     </div>
                     <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                      Data Otomatis Material Keluar &amp; Timestamp Eksekusi MIMS (Kolom A – R)
+                      Data Material Keluar &amp; Timestamp Eksekusi
                     </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Setiap material yang dikeluarkan dari Sheet <code className="font-mono">MATERIAL</code>{' '}
-                      otomatis masuk ke sheet ini lengkap dengan <strong>TIMESTAMP EKSEKUSI</strong>{' '}
-                      pada Kolom A.
-                    </p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -2420,7 +2002,7 @@ export default function App() {
                         {copiedMimsFormat ? (
                           <>
                             <Check className="w-4 h-4 text-emerald-600" />
-                            <span>Format Tersalin (Siap Paste)</span>
+                            <span>Format Tersalin</span>
                           </>
                         ) : (
                           <>
@@ -2442,83 +2024,12 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Format Schema Reference Strip (Columns A to R) */}
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                    Struktur Format Otomatis Sheet &quot;EKSEKUSI_MIMS&quot; (18 Kolom: A s/d R):
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 text-[11px] font-mono">
-                    {EKSEKUSI_MIMS_HEADERS.map((colName, idx) => {
-                      const colLetter = String.fromCharCode(65 + idx);
-                      const isHighlight =
-                        colLetter === 'A' ||
-                        colLetter === 'B' ||
-                        colLetter === 'O' ||
-                        colLetter === 'P';
-                      return (
-                        <span
-                          key={colName}
-                          className={`px-2 py-1 rounded border ${
-                            isHighlight
-                              ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-bold'
-                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                          }`}
-                        >
-                          {colLetter}: {colName}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-
                 {eksekusiMimsRows.length === 0 ? (
-                  <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+                  <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
                     <Clock className="w-9 h-9 text-amber-500 mx-auto stroke-1" />
-                    <div className="space-y-1 max-w-lg mx-auto">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
-                        Sheet &quot;EKSEKUSI_MIMS&quot; Saat Ini Masih Kosong (0 Baris)
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                        Sesuai konfigurasi sumber data, Sheet <code className="font-mono">EKSEKUSI_MIMS</code>{' '}
-                        dimulai dalam keadaan kosong dan akan terisi otomatis lengkap dengan{' '}
-                        <strong>TIMESTAMP EKSEKUSI</strong> setiap kali petugas memproses pengeluaran
-                        material.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const avail = rows.find((r) => r.status === 'SIAP PAKAI');
-                        if (!avail) return;
-                        const res = await fetch('/api/scan/outbound', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            snList: [avail.snMaterial],
-                            expectedCount: 1,
-                            expectedNoMaterial: 'ALL',
-                            petugas,
-                            noDokumen,
-                          }),
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                          triggerSound('commit');
-                          setRows(data.rows || []);
-                          setEksekusiMimsRows(data.eksekusiMimsRows || []);
-                          if (data.stats) setStats(data.stats);
-                          if (data.logs) setLogs(data.logs);
-                          setInlineBanner({
-                            type: 'success',
-                            title: '1 Baris Otomatis Masuk ke Sheet "EKSEKUSI_MIMS"!',
-                            message: data.message,
-                          });
-                        }
-                      }}
-                      className="min-h-[44px] px-4 py-2.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors"
-                    >
-                      + Simulasikan 1 Material Keluar → Masuk ke Sheet EKSEKUSI_MIMS
-                    </button>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                      Belum Ada Baris Material Keluar
+                    </p>
                   </div>
                 ) : (
                   <>
@@ -2550,7 +2061,7 @@ export default function App() {
                             </div>
                             <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/50 text-[11px] font-mono">
                               <div>
-                                <span className="text-slate-500 block">Kolom O (STATUS):</span>
+                                <span className="text-slate-500 block">Status:</span>
                                 <span className="font-bold text-amber-700 dark:text-amber-400">
                                   {m.status}
                                 </span>
@@ -2558,7 +2069,7 @@ export default function App() {
                               <div>
                                 <span className="text-slate-500 block">Bon &amp; Ref:</span>
                                 <span className="text-slate-800 dark:text-slate-200">
-                                  {m.noDokumen} (MATERIAL!#{m.sourceMaterialRowNumber})
+                                  {m.noDokumen} (MATERIAL_MASUK!#{m.sourceMaterialRowNumber})
                                 </span>
                               </div>
                             </div>
@@ -2566,7 +2077,7 @@ export default function App() {
                         ))}
                     </div>
 
-                    {/* DESKTOP FULL 18-COLUMN TABLE FOR SHEET EKSEKUSI_MIMS */}
+                    {/* DESKTOP FULL TABLE FOR SHEET EKSEKUSI_MIMS */}
                     <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
                       <table className="w-full text-left border-collapse">
                         <thead>
@@ -2632,7 +2143,7 @@ export default function App() {
                                   {m.petugas}
                                 </td>
                                 <td className="py-2 px-2.5 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                                  MATERIAL!Baris #{m.sourceMaterialRowNumber}
+                                  MATERIAL_MASUK!Baris #{m.sourceMaterialRowNumber}
                                 </td>
                               </tr>
                             ))}
@@ -2644,7 +2155,7 @@ export default function App() {
               </div>
             ) : (
               /* ===============================================================
-                 SHEET 1: "MATERIAL" (GID=0, KOLOM A - O)
+                 SHEET 1: "MATERIAL_MASUK" (KOLOM A - O)
               ================================================================ */
               <>
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 border-b border-slate-200 dark:border-slate-800 pb-4">
@@ -2652,7 +2163,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
                       <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                       <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">
-                        Sheet: &quot;MATERIAL&quot; (GID=0)
+                        Sheet: &quot;MATERIAL_MASUK&quot;
                       </span>
                       <span aria-hidden="true">·</span>
                       <span className="font-mono tabular-nums">
@@ -2661,7 +2172,7 @@ export default function App() {
                       </span>
                     </div>
                     <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                      Data Spreadsheet Material Gudang (Kolom A – Kolom O)
+                      Data Spreadsheet MATERIAL_MASUK
                     </h2>
                   </div>
 
@@ -2672,8 +2183,8 @@ export default function App() {
                       {(
                         [
                           { id: 'ALL', label: 'Semua' },
-                          { id: 'SIAP PAKAI', label: 'SIAP PAKAI' },
-                          { id: 'STOK TERPAKAI', label: 'STOK TERPAKAI' },
+                          { id: 'STOK SIAP', label: 'STOK SIAP' },
+                          { id: 'TERPAKAI', label: 'TERPAKAI' },
                           { id: 'BARU_MASUK', label: 'Baru Masuk' },
                         ] as const
                       ).map((tab) => (
@@ -2700,14 +2211,14 @@ export default function App() {
                           type="search"
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Cari SN (Kolom B), Batch..."
+                          placeholder="Cari SN QR, Batch..."
                           className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
                       </div>
 
                       <a
                         href="/api/export/csv"
-                        download="LOGISTIK_SINJAI_MATERIAL_GID_0.csv"
+                        download="LOGISTIK_SINJAI_MATERIAL_MASUK.csv"
                         className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
                       >
                         <Download className="w-4 h-4" />
@@ -2748,10 +2259,7 @@ export default function App() {
                     {/* MOBILE CARD LIST FOR SPREADSHEET (<768px) */}
                     <div className="md:hidden space-y-2.5">
                       {paginatedRows.map((row) => {
-                        const isTerpakai = row.status === 'STOK TERPAKAI';
-                        const isInOutboundQueue = outboundQueue.some(
-                          (q) => q.snMaterial === row.snMaterial
-                        );
+                        const isTerpakai = row.status === 'TERPAKAI';
                         return (
                           <div
                             key={`${row.rowNumber}-${row.snMaterial}`}
@@ -2775,15 +2283,12 @@ export default function App() {
                                     : 'text-emerald-700 dark:text-emerald-400'
                                 }`}
                               >
-                                Kolom O: {row.status}
+                                {row.status}
                               </span>
                             </div>
 
                             {/* Middle SN & Spec */}
                             <div className="space-y-1">
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                                Kolom B (SN MATERIAL):
-                              </div>
                               <div className="font-mono font-bold text-xs sm:text-sm text-slate-900 dark:text-white break-all tabular-nums">
                                 {row.snMaterial}
                               </div>
@@ -2802,7 +2307,7 @@ export default function App() {
                                 className="min-h-[42px] px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center gap-1.5"
                               >
                                 <Eye className="w-3.5 h-3.5 text-sky-600" />
-                                <span>Lihat Barcode</span>
+                                <span>Lihat QR Code</span>
                               </button>
                               <button
                                 type="button"
@@ -2811,19 +2316,13 @@ export default function App() {
                                   handleScanOutboundSN(row.snMaterial);
                                 }}
                                 className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 ${
-                                  isTerpakai || isInOutboundQueue
+                                  isTerpakai
                                     ? 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-300'
                                     : 'bg-slate-900 dark:bg-sky-600 text-white'
                                 }`}
                               >
-                                <ScanBarcode className="w-3.5 h-3.5" />
-                                <span>
-                                  {isTerpakai
-                                    ? 'Uji Scan Ulang'
-                                    : isInOutboundQueue
-                                    ? 'Di Antrean'
-                                    : 'Scan Keluar'}
-                                </span>
+                                <QrCode className="w-3.5 h-3.5" />
+                                <span>{isTerpakai ? 'TERPAKAI' : 'Scan QR Keluar'}</span>
                               </button>
                             </div>
                           </div>
@@ -2838,22 +2337,19 @@ export default function App() {
                           <tr className="bg-slate-100/90 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300">
                             <th className="py-2.5 px-2.5">Baris</th>
                             <th className="py-2.5 px-2.5">A · TANGGAL HISTORY</th>
-                            <th className="py-2.5 px-2.5">B · SN MATERIAL (Barcode)</th>
+                            <th className="py-2.5 px-2.5">B · SN MATERIAL (QR Code)</th>
                             <th className="py-2.5 px-2.5">C · NO MAT</th>
                             <th className="py-2.5 px-2.5">D · SPESIFIKASI</th>
                             <th className="py-2.5 px-2.5">E · STATUS TRANSAKSI</th>
                             <th className="py-2.5 px-2.5">G · BATCH</th>
                             <th className="py-2.5 px-2.5">M/N · UNIT GUDANG</th>
-                            <th className="py-2.5 px-2.5">O · STATUS</th>
-                            <th className="py-2.5 px-2.5 text-right">Aksi Scan</th>
+                            <th className="py-2.5 px-2.5">KETERANGAN / STATUS</th>
+                            <th className="py-2.5 px-2.5 text-right">Aksi Scan QR</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
                           {paginatedRows.map((row) => {
-                            const isTerpakai = row.status === 'STOK TERPAKAI';
-                            const isInOutboundQueue = outboundQueue.some(
-                              (q) => q.snMaterial === row.snMaterial
-                            );
+                            const isTerpakai = row.status === 'TERPAKAI';
                             return (
                               <tr
                                 key={`${row.rowNumber}-${row.snMaterial}`}
@@ -2878,7 +2374,7 @@ export default function App() {
                                       type="button"
                                       onClick={() => setPreviewBarcodeRow(row)}
                                       className="p-1 text-slate-400 hover:text-sky-600 rounded"
-                                      title="Lihat visual Barcode 1D"
+                                      title="Lihat visual QR Code"
                                     >
                                       <Eye className="w-3.5 h-3.5" />
                                     </button>
@@ -2902,11 +2398,11 @@ export default function App() {
                                 <td className="py-2 px-2.5 font-mono font-bold whitespace-nowrap">
                                   {isTerpakai ? (
                                     <span className="text-amber-700 dark:text-amber-400">
-                                      STOK TERPAKAI
+                                      TERPAKAI
                                     </span>
                                   ) : (
                                     <span className="text-emerald-700 dark:text-emerald-400">
-                                      SIAP PAKAI
+                                      STOK SIAP
                                     </span>
                                   )}
                                 </td>
@@ -2918,16 +2414,12 @@ export default function App() {
                                       handleScanOutboundSN(row.snMaterial);
                                     }}
                                     className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap shrink-0 ${
-                                      isTerpakai || isInOutboundQueue
+                                      isTerpakai
                                         ? 'bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
                                         : 'bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 dark:hover:bg-sky-500 text-white'
                                     }`}
                                   >
-                                    {isTerpakai
-                                      ? 'Uji Scan Ulang'
-                                      : isInOutboundQueue
-                                      ? 'Sudah di Antrean'
-                                      : 'Scan Keluar'}
+                                    {isTerpakai ? 'TERPAKAI' : 'Scan QR Keluar'}
                                   </button>
                                 </td>
                               </tr>
@@ -2973,18 +2465,17 @@ export default function App() {
         )}
 
         {/* ===================================================================
-            SECTION 4: RIWAYAT TRANSAKSI & LOG PERINGATAN SCAN
-            Mobile Cards on <768px + Desktop Table on >=768px
+            SECTION 4: RIWAYAT TRANSAKSI & LOG PERINGATAN SCAN QR
         ==================================================================== */}
         {activeSection === 'riwayat' && (
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
             <div className="border-b border-slate-200 dark:border-slate-800 pb-3.5">
               <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white font-display">
-                Riwayat Scan Barcode &amp; Log Notifikasi Peringatan
+                Riwayat Scan QR Code &amp; Log Notifikasi
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Mencatat aktivitas Material Masuk, Material Keluar, serta peringatan error duplikat
-                scan &amp; ketidakcocokan jumlah.
+                Mencatat aktivitas Material Masuk (STOK SIAP), Material Keluar (TERPAKAI), serta
+                peringatan duplikat QR Code.
               </p>
             </div>
 
@@ -2999,22 +2490,22 @@ export default function App() {
                     <span className="font-bold">
                       {log.type === 'MASUK' && (
                         <span className="text-emerald-700 dark:text-emerald-400">
-                          MATERIAL MASUK
+                          MATERIAL MASUK (STOK SIAP)
                         </span>
                       )}
                       {log.type === 'KELUAR' && (
                         <span className="text-amber-700 dark:text-amber-400">
-                          MATERIAL KELUAR
+                          MATERIAL KELUAR (TERPAKAI)
                         </span>
                       )}
                       {log.type === 'ERROR_DUPLIKAT' && (
                         <span className="text-red-600 dark:text-red-400">
-                          ALERT DUPLIKAT SCAN
+                          ALERT DUPLIKAT SCAN QR
                         </span>
                       )}
                       {log.type === 'ERROR_JUMLAH' && (
                         <span className="text-red-600 dark:text-red-400">
-                          ERROR SELISIH JUMLAH
+                          ERROR VALIDASI
                         </span>
                       )}
                       {log.type === 'ERROR_TIDAK_DITEMUKAN' && (
@@ -3043,7 +2534,7 @@ export default function App() {
                   <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                     <th className="py-2.5 px-3">Waktu Transaksi</th>
                     <th className="py-2.5 px-3">Jenis Aktivitas</th>
-                    <th className="py-2.5 px-3">SN MATERIAL (Kolom B)</th>
+                    <th className="py-2.5 px-3">SN MATERIAL (QR Code)</th>
                     <th className="py-2.5 px-3">Keterangan / Notifikasi Sistem</th>
                     <th className="py-2.5 px-3">Petugas</th>
                   </tr>
@@ -3075,7 +2566,7 @@ export default function App() {
                         )}
                         {log.type === 'ERROR_JUMLAH' && (
                           <span className="text-red-600 dark:text-red-400">
-                            ERROR SELISIH JUMLAH
+                            ERROR VALIDASI
                           </span>
                         )}
                         {log.type === 'ERROR_TIDAK_DITEMUKAN' && (
@@ -3120,14 +2611,7 @@ export default function App() {
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <div className="relative">
-              <ArrowUpRight className="w-5 h-5" />
-              {outboundQueue.length > 0 && (
-                <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
-                  {outboundQueue.length}
-                </span>
-              )}
-            </div>
+            <ArrowUpRight className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
               Scan Keluar
             </span>
@@ -3159,7 +2643,7 @@ export default function App() {
           >
             <FileSpreadsheet className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-              Spreadsheet
+              MATERIAL_MASUK
             </span>
           </button>
 
@@ -3181,7 +2665,7 @@ export default function App() {
       </div>
 
       {/* =====================================================================
-          BARCODE 1D PREVIEW FLOATING BOTTOM SHEET / MODAL
+          QR CODE PREVIEW FLOATING BOTTOM SHEET / MODAL
       ====================================================================== */}
       {previewBarcodeRow && (
         <div
@@ -3199,10 +2683,10 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div>
                 <span className="text-[11px] font-mono text-slate-500">
-                  Baris Spreadsheet #{previewBarcodeRow.rowNumber} · Kolom B
+                  MATERIAL_MASUK Baris #{previewBarcodeRow.rowNumber}
                 </span>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Label Barcode Serial Number (SN)
+                  Label QR Code Serial Number (SN)
                 </h3>
               </div>
               <button
@@ -3215,7 +2699,7 @@ export default function App() {
             </div>
 
             <div className="flex flex-col items-center justify-center py-4 px-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
-              <BarcodeGraphic value={previewBarcodeRow.snMaterial} height={54} />
+              <BarcodeGraphic value={previewBarcodeRow.snMaterial} height={148} />
               <div className="mt-3 text-xs text-slate-600 dark:text-slate-400 text-center space-y-0.5">
                 <div>
                   No. Material:{' '}
@@ -3224,10 +2708,10 @@ export default function App() {
                 </div>
                 <div className="font-mono text-[11px]">{previewBarcodeRow.spesifikasi}</div>
                 <div>
-                  Status Kolom O:{' '}
+                  Status:{' '}
                   <strong
                     className={`font-mono ${
-                      previewBarcodeRow.status === 'STOK TERPAKAI'
+                      previewBarcodeRow.status === 'TERPAKAI'
                         ? 'text-amber-700'
                         : 'text-emerald-700'
                     }`}
@@ -3249,7 +2733,7 @@ export default function App() {
                 }}
                 className="w-full min-h-[48px] px-4 py-3 text-xs sm:text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl"
               >
-                Simulasikan Scan Barcode Ini
+                Scan QR Code Ini untuk Material Keluar
               </button>
             </div>
           </div>
@@ -3287,10 +2771,12 @@ export default function App() {
         accessToken={accessToken}
         needsAuth={needsAuth}
         isSigningIn={isSigningIn}
+        authDomainError={authDomainError}
         connectedSheet={connectedSheet}
         selectedSheetTab={selectedSheetTab}
         onSelectSheetTab={(tab) => setSelectedSheetTab(tab)}
         onGoogleLogin={handleGoogleLogin}
+        onDirectGisLogin={handleDirectGisLogin}
         onGoogleLogout={handleGoogleLogout}
         onConnectSpreadsheet={(meta, tabTitle) => {
           setConnectedSheet(meta);
@@ -3304,7 +2790,7 @@ export default function App() {
           setInlineBanner({
             type: 'success',
             title: `Google Spreadsheet "${meta.title}" Terhubung`,
-            message: `Tab aktif: "${tabTitle}". Setiap Material Keluar otomatis diperbarui di Sheet MATERIAL & ditambahkan beserta Timestamp ke Sheet EKSEKUSI_MIMS.`,
+            message: `Tab aktif: "${tabTitle}". Setiap scan QR Material Masuk berstatus STOK SIAP dan Material Keluar mengubah status menjadi TERPAKAI.`,
           });
         }}
         onPullFromGoogleSheet={handlePullFromGoogleSheet}
@@ -3335,7 +2821,6 @@ export default function App() {
           if (Array.isArray(data.eksekusiMimsRows)) setEksekusiMimsRows(data.eksekusiMimsRows);
           if (data.stats) setStats(data.stats);
           if (data.logs) setLogs(data.logs);
-          setOutboundQueue([]);
           setInboundQueue([]);
           setInlineBanner({
             type: 'success',
@@ -3361,10 +2846,10 @@ export default function App() {
           <div className="flex items-center gap-4">
             <a
               href="/api/export/csv"
-              download="LOGISTIK_SINJAI_MATERIAL_GID_0.csv"
+              download="LOGISTIK_SINJAI_MATERIAL_MASUK.csv"
               className="hover:text-slate-900 dark:hover:text-white underline"
             >
-              Unduh Spreadsheet MATERIAL (GID=0)
+              Unduh Spreadsheet MATERIAL_MASUK
             </a>
           </div>
         </div>

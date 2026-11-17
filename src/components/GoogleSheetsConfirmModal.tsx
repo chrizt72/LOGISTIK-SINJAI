@@ -118,12 +118,12 @@ export const GoogleSheetsConfirmModal: React.FC<GoogleSheetsConfirmModalProps> =
                     </div>
                     <span
                       className={`font-bold shrink-0 ${
-                        row.status === 'STOK TERPAKAI'
+                        row.status === 'TERPAKAI'
                           ? 'text-amber-700 dark:text-amber-400'
                           : 'text-emerald-700 dark:text-emerald-400'
                       }`}
                     >
-                      Kolom O: {row.status}
+                      Status: {row.status}
                     </span>
                   </div>
                 ))}

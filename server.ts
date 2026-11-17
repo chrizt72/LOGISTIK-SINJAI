@@ -17,7 +17,7 @@ const PORT = 3000;
 const CSV_SOURCE_PATH = path.resolve(__dirname, 'public/assets/aistudio/LOGISTIK_SINJAI_df21ff73');
 const DATA_DIR = path.resolve(__dirname, 'data');
 const STATE_FILE_PATH = path.resolve(DATA_DIR, 'warehouse_state.json');
-const EXPORT_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_GID_0.csv');
+const EXPORT_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_MASUK.csv');
 const EXPORT_MIMS_CSV_PATH = path.resolve(DATA_DIR, 'EKSEKUSI_MIMS.csv');
 
 interface WarehouseState {
@@ -121,6 +121,14 @@ const MATERIAL_CATALOG: MaterialCatalogItem[] = [
   },
 ];
 
+function normalizeStatus(raw: unknown): MaterialStatus {
+  const cleaned = String(raw || '').trim().toUpperCase();
+  if (cleaned === 'TERPAKAI' || cleaned === 'STOK TERPAKAI') {
+    return 'TERPAKAI';
+  }
+  return 'STOK SIAP';
+}
+
 function formatNowTimestamp(): string {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -154,11 +162,7 @@ function parseInitialCsv(): MaterialRow[] {
     const line = lines[i].trim();
     if (!line) continue;
     const parts = line.split(',');
-    const rawColO = (parts[14] || '').trim().toUpperCase();
-    const status: MaterialStatus =
-      rawColO === 'STOK TERPAKAI' || rawColO === 'TERPAKAI'
-        ? 'STOK TERPAKAI'
-        : 'SIAP PAKAI';
+    const status = normalizeStatus(parts[14]);
 
     rows.push({
       rowNumber: i + 1,
@@ -213,7 +217,7 @@ function buildCsvContent(rows: MaterialRow[]): string {
 
 function buildMimsCsvContent(mimsRows: EksekusiMimsRow[]): string {
   const header =
-    'TIMESTAMP EKSEKUSI,SN MATERIAL,NO MATERIAL,SPESIFIKASI,STATUS TRANSAKSI,KATERGORI,NO BATCH,VALUATION TYPE,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,STOR LOC NAME,STATUS,NO DOKUMEN / BON,PETUGAS EKSEKUSI,REF BARIS MATERIAL';
+    'TIMESTAMP EKSEKUSI,SN MATERIAL,NO MATERIAL,SPESIFIKASI,STATUS TRANSAKSI,KATERGORI,NO BATCH,VALUATION TYPE,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,STOR LOC NAME,STATUS,NO DOKUMEN / BON,PETUGAS EKSEKUSI,REF BARIS MATERIAL_MASUK';
   const lines = [header];
   for (const r of mimsRows) {
     lines.push(
@@ -235,7 +239,7 @@ function buildMimsCsvContent(mimsRows: EksekusiMimsRow[]): string {
         r.status,
         r.noDokumen,
         r.petugas,
-        `MATERIAL!Baris #${r.sourceMaterialRowNumber}`,
+        `MATERIAL_MASUK!Baris #${r.sourceMaterialRowNumber}`,
       ].join(',')
     );
   }
@@ -251,11 +255,16 @@ function saveState(state: WarehouseState): void {
   }
   state.rows.forEach((r: MaterialRow, idx: number) => {
     r.rowNumber = idx + 2;
+    r.status = normalizeStatus(r.status);
   });
   state.eksekusiMimsRows.forEach((m: EksekusiMimsRow, idx: number) => {
     m.mimsRowNumber = idx + 2;
+    m.status = 'TERPAKAI';
   });
   state.sheetConfig.lastSyncedAt = formatNowTimestamp();
+  if (!state.sheetConfig.sheetName || state.sheetConfig.sheetName === 'MATERIAL') {
+    state.sheetConfig.sheetName = 'MATERIAL_MASUK';
+  }
   if (!state.sheetConfig.mimsSheetName) {
     state.sheetConfig.mimsSheetName = 'EKSEKUSI_MIMS';
   }
@@ -277,6 +286,19 @@ function loadState(): WarehouseState {
         if (!Array.isArray(parsed.eksekusiMimsRows)) {
           parsed.eksekusiMimsRows = [];
         }
+        parsed.rows = parsed.rows.map((r, idx) => ({
+          ...r,
+          rowNumber: idx + 2,
+          status: normalizeStatus(r.status),
+        }));
+        parsed.eksekusiMimsRows = parsed.eksekusiMimsRows.map((m, idx) => ({
+          ...m,
+          mimsRowNumber: idx + 2,
+          status: 'TERPAKAI',
+        }));
+        if (!parsed.sheetConfig.sheetName || parsed.sheetConfig.sheetName === 'MATERIAL') {
+          parsed.sheetConfig.sheetName = 'MATERIAL_MASUK';
+        }
         if (!parsed.sheetConfig.mimsSheetName) {
           parsed.sheetConfig.mimsSheetName = 'EKSEKUSI_MIMS';
         }
@@ -296,9 +318,9 @@ function loadState(): WarehouseState {
         timestamp: formatNowTimestamp(),
         type: 'MASUK',
         snMaterial: 'SYSTEM-SYNC',
-        message: `Spreadsheet "MATERIAL" (GID=0) dimuat (${initialRows.length} baris SIAP PAKAI) dan Sheet "EKSEKUSI_MIMS" siap menampung data Material Keluar otomatis dengan timestamp.`,
+        message: `Sheet "MATERIAL_MASUK" dimuat (${initialRows.length} baris berstatus STOK SIAP).`,
         petugas: 'Sistem Gudang',
-        noDokumen: 'INIT-GID-0',
+        noDokumen: 'INIT-MATERIAL-MASUK',
       },
     ],
     counters: {
@@ -309,7 +331,7 @@ function loadState(): WarehouseState {
     },
     sheetConfig: {
       spreadsheetName: 'LOGISTIK_SINJAI',
-      sheetName: 'MATERIAL',
+      sheetName: 'MATERIAL_MASUK',
       mimsSheetName: 'EKSEKUSI_MIMS',
       gid: '0',
       googleSheetUrl: '',
@@ -347,7 +369,7 @@ function computeStats(state: WarehouseState) {
   }
 
   for (const r of state.rows) {
-    const isTerpakai = r.status === 'STOK TERPAKAI';
+    const isTerpakai = r.status === 'TERPAKAI';
     if (isTerpakai) {
       stokTerpakaiCount++;
     } else {
@@ -411,14 +433,14 @@ async function startServer() {
       return res.status(400).json({
         valid: false,
         errorType: 'EMPTY_SN',
-        title: 'Barcode Kosong',
-        message: 'Nomor Serial Number (SN) hasil scan tidak boleh kosong.',
+        title: 'QR Code Kosong',
+        message: 'Nomor Serial Number (SN) hasil scan QR tidak boleh kosong.',
       });
     }
 
-    const inSession = Array.isArray(sessionScannedSNs) && sessionScannedSNs.some(
-      (s: string) => String(s).trim().toUpperCase() === cleanedSN
-    );
+    const inSession =
+      Array.isArray(sessionScannedSNs) &&
+      sessionScannedSNs.some((s: string) => String(s).trim().toUpperCase() === cleanedSN);
     if (inSession) {
       warehouseState.counters.duplicateAlertCount++;
       const logEntry: ScanLogEntry = {
@@ -426,7 +448,7 @@ async function startServer() {
         timestamp: formatNowTimestamp(),
         type: 'ERROR_DUPLIKAT',
         snMaterial: cleanedSN,
-        message: `PERINGATAN DUPLIKAT SESI: Barcode SN ${cleanedSN} sudah di-scan dalam antrean sesi ${mode} saat ini.`,
+        message: `PERINGATAN DUPLIKAT SESI: QR Code SN ${cleanedSN} sudah di-scan dalam antrean sesi ${mode} saat ini.`,
         petugas,
       };
       warehouseState.logs.unshift(logEntry);
@@ -435,8 +457,8 @@ async function startServer() {
       return res.status(409).json({
         valid: false,
         errorType: 'DUPLICATE_IN_SESSION',
-        title: 'Barcode Sudah Di-scan di Sesi Ini!',
-        message: `Serial Number (SN) ${cleanedSN} sudah berada di dalam daftar antrean scan saat ini. Tidak boleh melakukan scan berulang pada barcode yang sama.`,
+        title: 'QR Code Sudah Di-scan di Sesi Ini!',
+        message: `Serial Number (SN) ${cleanedSN} sudah berada di dalam daftar antrean scan saat ini. Tidak boleh melakukan scan berulang pada QR Code yang sama.`,
         snMaterial: cleanedSN,
         stats: computeStats(warehouseState),
         logs: warehouseState.logs.slice(0, 150),
@@ -459,7 +481,7 @@ async function startServer() {
           spesifikasi: existingRow.spesifikasi,
           statusColO: existingRow.status,
           rowNumber: existingRow.rowNumber,
-          message: `PERINGATAN BARCODE SUDAH TERDAFTAR: SN ${cleanedSN} sudah pernah di-scan masuk (Baris Spreadsheet #${existingRow.rowNumber}, Kolom O: ${existingRow.status}).`,
+          message: `PERINGATAN QR SUDAH TERDAFTAR: SN ${cleanedSN} sudah pernah di-scan masuk pada Sheet "MATERIAL_MASUK" (Baris #${existingRow.rowNumber}, Status: ${existingRow.status}).`,
           petugas,
         };
         warehouseState.logs.unshift(logEntry);
@@ -468,8 +490,8 @@ async function startServer() {
         return res.status(409).json({
           valid: false,
           errorType: 'DUPLICATE_IN_DATABASE',
-          title: 'Peringatan: Barcode Sudah Pernah Di-scan!',
-          message: `SN Material ${cleanedSN} sudah terdaftar pada Sheet "MATERIAL" di Baris #${existingRow.rowNumber} dengan status Kolom O "${existingRow.status}". Material masuk tidak boleh menduplikasi SN yang sudah ada.`,
+          title: 'Peringatan: QR Code Sudah Pernah Di-scan!',
+          message: `SN Material ${cleanedSN} sudah terdaftar pada Sheet "MATERIAL_MASUK" di Baris #${existingRow.rowNumber} dengan keterangan "${existingRow.status}". Material masuk tidak boleh menduplikasi SN yang sudah ada.`,
           existingRow,
           snMaterial: cleanedSN,
           stats: computeStats(warehouseState),
@@ -482,7 +504,7 @@ async function startServer() {
         valid: true,
         snMaterial: cleanedSN,
         detectedCatalog,
-        message: `SN ${cleanedSN} valid dan siap ditambahkan ke baris baru Sheet "MATERIAL" dengan Kolom O = SIAP PAKAI.`,
+        message: `SN ${cleanedSN} valid dan siap ditambahkan melanjutkan baris pada Sheet "MATERIAL_MASUK" dengan status STOK SIAP.`,
       });
     } else {
       if (!existingRow) {
@@ -491,7 +513,7 @@ async function startServer() {
           timestamp: formatNowTimestamp(),
           type: 'ERROR_TIDAK_DITEMUKAN',
           snMaterial: cleanedSN,
-          message: `ERROR SCAN KELUAR: SN ${cleanedSN} tidak ditemukan pada Sheet "MATERIAL" (GID=0).`,
+          message: `ERROR SCAN KELUAR: SN ${cleanedSN} tidak ditemukan pada Sheet "MATERIAL_MASUK".`,
           petugas,
         };
         warehouseState.logs.unshift(logEntry);
@@ -500,15 +522,15 @@ async function startServer() {
         return res.status(404).json({
           valid: false,
           errorType: 'NOT_FOUND_IN_STOCK',
-          title: 'SN Material Tidak Ditemukan di Stok!',
-          message: `Barcode SN ${cleanedSN} tidak terdaftar pada Sheet "MATERIAL". Pastikan material sudah pernah di-scan masuk sebelum dikeluarkan.`,
+          title: 'SN Material Tidak Ditemukan di MATERIAL_MASUK!',
+          message: `QR Code SN ${cleanedSN} tidak terdaftar pada Sheet "MATERIAL_MASUK". Pastikan material sudah pernah di-scan masuk sebelum dikeluarkan.`,
           snMaterial: cleanedSN,
           stats: computeStats(warehouseState),
           logs: warehouseState.logs.slice(0, 150),
         });
       }
 
-      if (existingRow.status === 'STOK TERPAKAI') {
+      if (existingRow.status === 'TERPAKAI') {
         warehouseState.counters.duplicateAlertCount++;
         const logEntry: ScanLogEntry = {
           id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -519,7 +541,7 @@ async function startServer() {
           spesifikasi: existingRow.spesifikasi,
           statusColO: existingRow.status,
           rowNumber: existingRow.rowNumber,
-          message: `PERINGATAN BARCODE SUDAH TERPAKAI: SN ${cleanedSN} (Baris #${existingRow.rowNumber}) sudah pernah di-scan keluar sebelumnya (Kolom O: STOK TERPAKAI).`,
+          message: `PERINGATAN QR SUDAH TERPAKAI: SN ${cleanedSN} (Baris #${existingRow.rowNumber} pada Sheet "MATERIAL_MASUK") sudah tercatat keluar dengan status TERPAKAI.`,
           petugas,
         };
         warehouseState.logs.unshift(logEntry);
@@ -528,8 +550,8 @@ async function startServer() {
         return res.status(409).json({
           valid: false,
           errorType: 'ALREADY_USED_OUTBOUND',
-          title: 'Peringatan: Barcode Sudah Pernah Di-scan Keluar!',
-          message: `SN Material ${cleanedSN} (Baris #${existingRow.rowNumber}) sudah berstatus "STOK TERPAKAI" pada Kolom O${existingRow.lastScannedAt ? ` sejak ${existingRow.lastScannedAt}` : ''}. Material ini tidak dapat dikeluarkan dua kali!`,
+          title: 'Peringatan: QR Code Sudah Tercatat Keluar (TERPAKAI)!',
+          message: `SN Material ${cleanedSN} (Baris #${existingRow.rowNumber} pada Sheet "MATERIAL_MASUK") sudah berstatus "TERPAKAI"${existingRow.lastScannedAt ? ` sejak ${existingRow.lastScannedAt}` : ''}. Material ini tidak dapat dikeluarkan dua kali!`,
           existingRow,
           snMaterial: cleanedSN,
           stats: computeStats(warehouseState),
@@ -541,7 +563,7 @@ async function startServer() {
         valid: true,
         snMaterial: cleanedSN,
         existingRow,
-        message: `SN ${cleanedSN} ditemukan (Baris #${existingRow.rowNumber}, Status: SIAP PAKAI) dan siap dikeluarkan.`,
+        message: `SN ${cleanedSN} ditemukan pada Sheet "MATERIAL_MASUK" (Baris #${existingRow.rowNumber}, Status: STOK SIAP) dan proses pengeluaran dilanjutkan.`,
       });
     }
   });
@@ -558,7 +580,7 @@ async function startServer() {
         success: false,
         errorType: 'EMPTY_ITEMS',
         title: 'Daftar Scan Masuk Kosong',
-        message: 'Silakan scan minimal 1 barcode Serial Number (SN) material masuk terlebih dahulu.',
+        message: 'Silakan scan minimal 1 QR Code Serial Number (SN) material masuk terlebih dahulu.',
       });
     }
 
@@ -583,7 +605,7 @@ async function startServer() {
           snMaterial: sn,
           rowNumber: existing.rowNumber,
           status: existing.status,
-          reason: `Sudah terdaftar di Baris #${existing.rowNumber} (Kolom O: ${existing.status})`,
+          reason: `Sudah terdaftar di Sheet "MATERIAL_MASUK" Baris #${existing.rowNumber} (Status: ${existing.status})`,
         });
       }
     }
@@ -595,7 +617,7 @@ async function startServer() {
         timestamp: nowStr,
         type: 'ERROR_DUPLIKAT',
         snMaterial: duplicates.map((d) => d.snMaterial).join(', '),
-        message: `GAGAL TAMBAH MATERIAL MASUK: Ditemukan ${duplicates.length} barcode SN yang sudah pernah di-scan sebelumnya (${duplicates.map((d) => d.snMaterial).join(', ')}).`,
+        message: `GAGAL TAMBAH MATERIAL MASUK: Ditemukan ${duplicates.length} QR Code SN yang sudah pernah di-scan sebelumnya (${duplicates.map((d) => d.snMaterial).join(', ')}).`,
         petugas,
         noDokumen,
       });
@@ -604,8 +626,8 @@ async function startServer() {
       return res.status(409).json({
         success: false,
         errorType: 'DUPLICATE_BARCODE',
-        title: 'Peringatan Error: Barcode Sudah Pernah Di-scan!',
-        message: `Terdapat ${duplicates.length} Serial Number (SN) yang sudah terdaftar di Spreadsheet. Sistem menolak penambahan baris duplikat.`,
+        title: 'Peringatan Error: QR Code Sudah Pernah Di-scan!',
+        message: `Terdapat ${duplicates.length} Serial Number (SN) yang sudah terdaftar di Sheet "MATERIAL_MASUK". Sistem menolak penambahan baris duplikat.`,
         duplicates,
         stats: computeStats(warehouseState),
         logs: warehouseState.logs.slice(0, 150),
@@ -635,7 +657,7 @@ async function startServer() {
         unitInduk: catalogMatch.unitInduk,
         unit: catalogMatch.unit,
         storLocName: catalogMatch.storLocName,
-        status: 'SIAP PAKAI',
+        status: 'STOK SIAP',
         lastScannedAt: nowStr,
         lastScanType: 'MASUK',
         petugas,
@@ -652,9 +674,9 @@ async function startServer() {
         snMaterial: sn,
         noMaterial: newRow.noMaterial,
         spesifikasi: newRow.spesifikasi,
-        statusColO: 'SIAP PAKAI',
+        statusColO: 'STOK SIAP',
         rowNumber: newRow.rowNumber,
-        message: `MATERIAL MASUK: Baris baru #${newRow.rowNumber} ditambahkan ke Sheet "MATERIAL" — SN ${sn} (${newRow.noMaterial}) -> Kolom O: SIAP PAKAI.`,
+        message: `MATERIAL MASUK: Baris baru #${newRow.rowNumber} ditambahkan melanjutkan Sheet "MATERIAL_MASUK" — SN ${sn} (${newRow.noMaterial}) -> Status: STOK SIAP.`,
         petugas,
         noDokumen,
       });
@@ -670,7 +692,7 @@ async function startServer() {
       rows: warehouseState.rows,
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
-      message: `Berhasil menambahkan ${addedRows.length} baris material masuk baru ke Sheet "MATERIAL" dengan status Kolom O = "SIAP PAKAI".`,
+      message: `Berhasil menambahkan ${addedRows.length} baris baru melanjutkan Sheet "MATERIAL_MASUK" dengan keterangan status "STOK SIAP".`,
     });
   });
 
@@ -690,7 +712,13 @@ async function startServer() {
 
     const targetQty = Number(expectedCount);
 
-    if (!Number.isNaN(targetQty) && targetQty > 0 && cleanedList.length !== targetQty) {
+    if (
+      expectedCount !== undefined &&
+      expectedCount !== null &&
+      !Number.isNaN(targetQty) &&
+      targetQty > 0 &&
+      cleanedList.length !== targetQty
+    ) {
       warehouseState.counters.mismatchAlertCount++;
       const diff = cleanedList.length - targetQty;
       const diffText =
@@ -703,7 +731,7 @@ async function startServer() {
         timestamp: nowStr,
         type: 'ERROR_JUMLAH',
         snMaterial: cleanedList.join(', ') || '-',
-        message: `PERINGATAN ERROR KETIDAKCOCOKAN JUMLAH KELUAR: Target pengeluaran ${targetQty} unit, namun jumlah barcode di-scan ${cleanedList.length} unit (${diffText}). Transaksi ditolak!`,
+        message: `PERINGATAN ERROR KETIDAKCOCOKAN JUMLAH KELUAR: Target pengeluaran ${targetQty} unit, namun jumlah QR di-scan ${cleanedList.length} unit (${diffText}). Transaksi ditolak!`,
         petugas,
         noDokumen,
       };
@@ -714,7 +742,7 @@ async function startServer() {
         success: false,
         errorType: 'QUANTITY_MISMATCH',
         title: 'Peringatan Error: Ketidakcocokan Jumlah Material Keluar!',
-        message: `Jumlah material yang di-scan (${cleanedList.length} unit) TIDAK COCOK dengan Target Jumlah Pengeluaran (${targetQty} unit) — ${diffText}. Harap sesuaikan scan barcode sebelum memproses pengeluaran!`,
+        message: `Jumlah material yang di-scan (${cleanedList.length} unit) TIDAK COCOK dengan Target Jumlah Pengeluaran (${targetQty} unit) — ${diffText}.`,
         details: {
           expectedCount: targetQty,
           scannedCount: cleanedList.length,
@@ -729,8 +757,8 @@ async function startServer() {
       return res.status(400).json({
         success: false,
         errorType: 'EMPTY_SCAN',
-        title: 'Belum Ada Barcode Di-scan',
-        message: 'Silakan scan minimal 1 Nomor Serial Number (SN) material yang akan dikeluarkan.',
+        title: 'Belum Ada QR Code Di-scan',
+        message: 'Silakan scan minimal 1 QR Code Serial Number (SN) material yang akan dikeluarkan.',
       });
     }
 
@@ -761,17 +789,17 @@ async function startServer() {
         errors.push({
           snMaterial: sn,
           errorType: 'NOT_FOUND',
-          reason: `SN ${sn} tidak ditemukan di Sheet "MATERIAL".`,
+          reason: `SN ${sn} tidak ditemukan di Sheet "MATERIAL_MASUK".`,
         });
         continue;
       }
 
-      if (row.status === 'STOK TERPAKAI') {
+      if (row.status === 'TERPAKAI') {
         errors.push({
           snMaterial: sn,
           rowNumber: row.rowNumber,
           errorType: 'ALREADY_USED',
-          reason: `SN ${sn} (Baris #${row.rowNumber}) sudah pernah di-scan keluar sebelumnya (Kolom O: STOK TERPAKAI).`,
+          reason: `SN ${sn} (Baris #${row.rowNumber} pada Sheet "MATERIAL_MASUK") sudah tercatat keluar dengan status TERPAKAI.`,
         });
         continue;
       }
@@ -814,7 +842,7 @@ async function startServer() {
         success: false,
         errorType: hasDuplicate ? 'DUPLICATE_OR_ALREADY_USED' : 'VALIDATION_ERROR',
         title: hasDuplicate
-          ? 'Peringatan Error: Barcode Sudah Pernah Di-scan / Terpakai!'
+          ? 'Peringatan Error: QR Code Sudah Pernah Di-scan / TERPAKAI!'
           : 'Peringatan Error Validasi Material Keluar!',
         message: errors.map((e) => e.reason).join(' '),
         errors,
@@ -830,7 +858,7 @@ async function startServer() {
     }
 
     for (const row of targetRows) {
-      row.status = 'STOK TERPAKAI';
+      row.status = 'TERPAKAI';
       row.tanggalHistory = nowStr;
       row.lastScannedAt = nowStr;
       row.lastScanType = 'KELUAR';
@@ -854,7 +882,7 @@ async function startServer() {
         unitInduk: row.unitInduk || 'UIW SULSELRABAR',
         unit: row.unit || 'ULP SINJAI',
         storLocName: row.storLocName || 'Gd ULP Sinjai',
-        status: 'STOK TERPAKAI',
+        status: 'TERPAKAI',
         noDokumen: noDokumen || 'BON-SINJAI',
         petugas: petugas || 'Petugas Logistik Sinjai',
         sourceMaterialRowNumber: row.rowNumber,
@@ -869,10 +897,10 @@ async function startServer() {
         snMaterial: row.snMaterial,
         noMaterial: row.noMaterial,
         spesifikasi: row.spesifikasi,
-        statusColO: 'STOK TERPAKAI',
+        statusColO: 'TERPAKAI',
         rowNumber: row.rowNumber,
         mimsRowNumber: newMimsRow.mimsRowNumber,
-        message: `MATERIAL KELUAR & EKSEKUSI_MIMS: Baris #${row.rowNumber} (SN: ${row.snMaterial}) diubah menjadi "STOK TERPAKAI" di Sheet MATERIAL & otomatis masuk ke Sheet "EKSEKUSI_MIMS" Baris #${newMimsRow.mimsRowNumber} (Timestamp: ${nowStr}).`,
+        message: `MATERIAL KELUAR: Baris #${row.rowNumber} (SN: ${row.snMaterial}) pada Sheet "MATERIAL_MASUK" masih berstatus STOK SIAP -> proses dilanjutkan dan status berubah menjadi "TERPAKAI".`,
         petugas,
         noDokumen,
       });
@@ -890,7 +918,7 @@ async function startServer() {
       eksekusiMimsRows: warehouseState.eksekusiMimsRows,
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
-      message: `Berhasil memproses pengeluaran ${updatedRows.length} unit material. Kolom O pada Sheet "MATERIAL" diperbarui menjadi "STOK TERPAKAI" dan ${addedMimsRows.length} baris baru otomatis tercatat di Sheet "EKSEKUSI_MIMS" lengkap dengan Timestamp (${nowStr}).`,
+      message: `Berhasil memproses pengeluaran ${updatedRows.length} unit material. Status pada Sheet "MATERIAL_MASUK" berubah dari "STOK SIAP" menjadi "TERPAKAI".`,
     });
   });
 
@@ -927,7 +955,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="LOGISTIK_SINJAI_MATERIAL_GID_0.csv"'
+      'attachment; filename="LOGISTIK_SINJAI_MATERIAL_MASUK.csv"'
     );
     res.send(csvData);
   });
@@ -962,11 +990,7 @@ async function startServer() {
                 const line = lines[i].trim();
                 if (!line) continue;
                 const parts = line.split(',');
-                const rawColO = (parts[14] || '').trim().toUpperCase();
-                const status: MaterialStatus =
-                  rawColO === 'STOK TERPAKAI' || rawColO === 'TERPAKAI'
-                    ? 'STOK TERPAKAI'
-                    : 'SIAP PAKAI';
+                const status = normalizeStatus(parts[14]);
                 importedRows.push({
                   rowNumber: i + 1,
                   tanggalHistory: (parts[0] || '').trim(),
@@ -993,7 +1017,7 @@ async function startServer() {
                 timestamp: formatNowTimestamp(),
                 type: 'MASUK',
                 snMaterial: 'GOOGLE-SHEET-SYNC',
-                message: `Berhasil sinkronisasi langsung dari Link Google Spreadsheet (Sheet "MATERIAL" GID=0): ${importedRows.length} baris dimuat.`,
+                message: `Berhasil sinkronisasi langsung dari Link Google Spreadsheet (Sheet "MATERIAL_MASUK"): ${importedRows.length} baris dimuat.`,
                 petugas: 'Sistem Gudang',
               });
               saveState(warehouseState);
@@ -1003,7 +1027,7 @@ async function startServer() {
                 stats: computeStats(warehouseState),
                 logs: warehouseState.logs.slice(0, 150),
                 sheetConfig: warehouseState.sheetConfig,
-                message: `Berhasil menyinkronkan ${importedRows.length} baris dari Google Spreadsheet (Sheet "MATERIAL" GID=0).`,
+                message: `Berhasil menyinkronkan ${importedRows.length} baris dari Google Spreadsheet (Sheet "MATERIAL_MASUK").`,
               });
             }
           }
@@ -1020,7 +1044,7 @@ async function startServer() {
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
       sheetConfig: warehouseState.sheetConfig,
-      message: 'Konfigurasi link Spreadsheet "MATERIAL" (GID=0) berhasil disimpan dan disinkronkan.',
+      message: 'Konfigurasi link Spreadsheet "MATERIAL_MASUK" berhasil disimpan dan disinkronkan.',
     });
   });
 
@@ -1028,7 +1052,7 @@ async function startServer() {
     const {
       rows: importedRows = [],
       spreadsheetName = 'LOGISTIK_SINJAI',
-      sheetName = 'MATERIAL',
+      sheetName = 'MATERIAL_MASUK',
       googleSheetUrl = '',
       userEmail = '',
     } = req.body || {};
@@ -1043,10 +1067,11 @@ async function startServer() {
     warehouseState.rows = importedRows.map((r: MaterialRow, idx: number) => ({
       ...r,
       rowNumber: idx + 2,
+      status: normalizeStatus(r.status),
     }));
     warehouseState.sheetConfig = {
       spreadsheetName: String(spreadsheetName || 'LOGISTIK_SINJAI'),
-      sheetName: String(sheetName || 'MATERIAL'),
+      sheetName: String(sheetName || 'MATERIAL_MASUK'),
       mimsSheetName: 'EKSEKUSI_MIMS',
       gid: '0',
       googleSheetUrl: String(googleSheetUrl || warehouseState.sheetConfig.googleSheetUrl),
@@ -1085,7 +1110,7 @@ async function startServer() {
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
       sheetConfig: warehouseState.sheetConfig,
-      message: 'Data spreadsheet berhasil dikembalikan ke kondisi awal (980 baris SIAP PAKAI dan Sheet EKSEKUSI_MIMS kosong).',
+      message: 'Data spreadsheet berhasil dikembalikan ke kondisi awal (980 baris STOK SIAP pada Sheet MATERIAL_MASUK).',
     });
   });
 
