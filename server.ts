@@ -39,6 +39,7 @@ interface WarehouseState {
     googleSheetUrl: string;
     lastSyncedAt: string;
   };
+  isCleanedV2?: boolean;
 }
 
 const MATERIAL_CATALOG: MaterialCatalogItem[] = [
@@ -277,6 +278,41 @@ function saveState(state: WarehouseState): void {
   fs.writeFileSync(EXPORT_MIMS_CSV_PATH, mimsCsvContent, 'utf8');
 }
 
+function createCleanWarehouseState(): WarehouseState {
+  return {
+    rows: [],
+    eksekusiMimsRows: [],
+    logs: [
+      {
+        id: `clean-log-${Date.now()}`,
+        timestamp: formatNowTimestamp(),
+        type: 'MASUK',
+        snMaterial: 'CLEAN-STATE',
+        message:
+          'Data Rekapitulasi Stok per Nomor Material (Gd ULP Sinjai) telah dibersihkan (0 unit). Siap menerima Scan QR Material baru.',
+        petugas: 'Sistem Gudang',
+        noDokumen: 'CLEAN-INIT',
+      },
+    ],
+    counters: {
+      inboundAddedCount: 0,
+      outboundUsedCount: 0,
+      duplicateAlertCount: 0,
+      mismatchAlertCount: 0,
+    },
+    sheetConfig: {
+      spreadsheetName: 'LOGISTIK_SINJAI',
+      sheetName: 'MATERIAL_MASUK',
+      mimsSheetName: 'MATERIAL_KELUAR',
+      mimsGid: '164626621',
+      gid: '0',
+      googleSheetUrl: '',
+      lastSyncedAt: formatNowTimestamp(),
+    },
+    isCleanedV2: true,
+  };
+}
+
 function loadState(): WarehouseState {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -284,7 +320,7 @@ function loadState(): WarehouseState {
   if (fs.existsSync(STATE_FILE_PATH)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(STATE_FILE_PATH, 'utf8')) as WarehouseState;
-      if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+      if (parsed && parsed.isCleanedV2 === true && Array.isArray(parsed.rows)) {
         if (!Array.isArray(parsed.eksekusiMimsRows)) {
           parsed.eksekusiMimsRows = [];
         }
@@ -308,42 +344,12 @@ function loadState(): WarehouseState {
         return parsed;
       }
     } catch (e) {
-      console.error('Failed to read warehouse_state.json, re-initializing from CSV:', e);
+      console.error('Failed to read warehouse_state.json, initializing clean state:', e);
     }
   }
-  const initialRows = parseInitialCsv();
-  const initialState: WarehouseState = {
-    rows: initialRows,
-    eksekusiMimsRows: [],
-    logs: [
-      {
-        id: 'init-log-1',
-        timestamp: formatNowTimestamp(),
-        type: 'MASUK',
-        snMaterial: 'SYSTEM-SYNC',
-        message: `Sheet "MATERIAL_MASUK" dimuat (${initialRows.length} baris berstatus STOK SIAP).`,
-        petugas: 'Sistem Gudang',
-        noDokumen: 'INIT-MATERIAL-MASUK',
-      },
-    ],
-    counters: {
-      inboundAddedCount: 0,
-      outboundUsedCount: 0,
-      duplicateAlertCount: 0,
-      mismatchAlertCount: 0,
-    },
-    sheetConfig: {
-      spreadsheetName: 'LOGISTIK_SINJAI',
-      sheetName: 'MATERIAL_MASUK',
-      mimsSheetName: 'MATERIAL_KELUAR',
-      mimsGid: '164626621',
-      gid: '0',
-      googleSheetUrl: '',
-      lastSyncedAt: formatNowTimestamp(),
-    },
-  };
-  saveState(initialState);
-  return initialState;
+  const cleanState = createCleanWarehouseState();
+  saveState(cleanState);
+  return cleanState;
 }
 
 function computeStats(state: WarehouseState) {
@@ -738,6 +744,7 @@ async function startServer() {
   app.post('/api/scan/outbound', (req, res) => {
     const {
       snList = [],
+      items = [],
       expectedCount,
       expectedNoMaterial = 'ALL',
       petugas = 'Petugas Logistik Sinjai',
@@ -746,6 +753,23 @@ async function startServer() {
     } = req.body || {};
 
     const nowStr = formatNowTimestamp();
+    const itemMetaMap = new Map<
+      string,
+      { noMaterial?: string; spesifikasi?: string; kategori?: string; noBatch?: string }
+    >();
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        if (it && it.snMaterial) {
+          itemMetaMap.set(String(it.snMaterial).trim().toUpperCase(), {
+            noMaterial: it.noMaterial,
+            spesifikasi: it.spesifikasi,
+            kategori: it.kategori,
+            noBatch: it.noBatch,
+          });
+        }
+      }
+    }
+
     const cleanedList: string[] = Array.isArray(snList)
       ? snList.map((s: unknown) => String(s || '').trim().toUpperCase()).filter(Boolean)
       : [];
@@ -797,8 +821,8 @@ async function startServer() {
       return res.status(400).json({
         success: false,
         errorType: 'EMPTY_SCAN',
-        title: 'Belum Ada QR Code Di-scan',
-        message: 'Silakan scan minimal 1 QR Code Serial Number (SN) material yang akan dikeluarkan.',
+        title: 'Belum Ada Material Di-scan / Diinput',
+        message: 'Silakan scan QR Code atau input material yang akan dikeluarkan terlebih dahulu.',
       });
     }
 
@@ -817,6 +841,7 @@ async function startServer() {
       }
       seen.add(sn);
 
+      const customMeta = itemMetaMap.get(sn);
       let row = warehouseState.rows.find(
         (r: MaterialRow) => r.snMaterial.toUpperCase() === sn
       );
@@ -829,11 +854,11 @@ async function startServer() {
             rowNumber: warehouseState.rows.length + 2,
             tanggalHistory: nowStr,
             snMaterial: sn,
-            noMaterial: catalogMatch.noMaterial,
-            spesifikasi: catalogMatch.spesifikasi,
+            noMaterial: customMeta?.noMaterial || catalogMatch.noMaterial,
+            spesifikasi: customMeta?.spesifikasi || catalogMatch.spesifikasi,
             statusTransaksi: 'STOK SIAP ULP',
-            kategori: catalogMatch.kategori,
-            noBatch: catalogMatch.defaultBatch,
+            kategori: customMeta?.kategori || catalogMatch.kategori,
+            noBatch: customMeta?.noBatch || catalogMatch.defaultBatch,
             valuationType: catalogMatch.valuationType,
             plant: catalogMatch.plant,
             storLoc: catalogMatch.storLoc,
@@ -856,6 +881,9 @@ async function startServer() {
           });
           continue;
         }
+      } else if (customMeta?.spesifikasi) {
+        row.spesifikasi = customMeta.spesifikasi;
+        if (customMeta.noMaterial) row.noMaterial = customMeta.noMaterial;
       }
 
       if (row.status === 'TERPAKAI') {
@@ -1164,10 +1192,13 @@ async function startServer() {
   });
 
   app.post('/api/reset', (_req, res) => {
-    if (fs.existsSync(STATE_FILE_PATH)) {
-      fs.unlinkSync(STATE_FILE_PATH);
+    const prevSheetConfig = warehouseState?.sheetConfig;
+    warehouseState = createCleanWarehouseState();
+    if (prevSheetConfig?.googleSheetUrl) {
+      warehouseState.sheetConfig.googleSheetUrl = prevSheetConfig.googleSheetUrl;
+      warehouseState.sheetConfig.spreadsheetName = prevSheetConfig.spreadsheetName;
     }
-    warehouseState = loadState();
+    saveState(warehouseState);
     res.json({
       success: true,
       rows: warehouseState.rows,
@@ -1175,7 +1206,7 @@ async function startServer() {
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
       sheetConfig: warehouseState.sheetConfig,
-      message: 'Data spreadsheet berhasil dikembalikan ke kondisi awal (980 baris STOK SIAP pada Sheet MATERIAL_MASUK).',
+      message: 'Data Rekapitulasi Stok per Nomor Material (Gd ULP Sinjai) berhasil dibersihkan (0 baris).',
     });
   });
 
@@ -1184,7 +1215,11 @@ async function startServer() {
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1196,7 +1231,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SIMLOG PLN ULP Sinjai Server running on http://0.0.0.0:${PORT}`);
+    console.log(`LOGISTIK EHAO Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

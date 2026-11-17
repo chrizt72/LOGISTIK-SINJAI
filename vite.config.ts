@@ -21,10 +21,10 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'SIMLOG PLN ULP Sinjai — Monitoring Material Gudang',
-          short_name: 'SIMLOG PLN',
+          name: 'LOGISTIK EHAO — Monitoring & Rekap Stok Material Gudang',
+          short_name: 'LOGISTIK EHAO',
           description:
-            'Aplikasi monitoring stok material masuk dan keluar berbasis scan barcode Serial Number (SN) dengan sinkronisasi Sheet MATERIAL & EKSEKUSI_MIMS untuk Gudang Logistik PLN ULP Sinjai.',
+            'Aplikasi monitoring stok material masuk dan keluar berbasis scan QR Code Serial Number (SN) dan Material Tanpa QR dengan sinkronisasi Sheet MATERIAL_MASUK & MATERIAL_KELUAR.',
           theme_color: '#0f172a',
           background_color: '#0f172a',
           display: 'standalone',
