@@ -18,7 +18,7 @@ const CSV_SOURCE_PATH = path.resolve(__dirname, 'public/assets/aistudio/LOGISTIK
 const DATA_DIR = path.resolve(__dirname, 'data');
 const STATE_FILE_PATH = path.resolve(DATA_DIR, 'warehouse_state.json');
 const EXPORT_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_MASUK.csv');
-const EXPORT_MIMS_CSV_PATH = path.resolve(DATA_DIR, 'EKSEKUSI_MIMS.csv');
+const EXPORT_MIMS_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_KELUAR.csv');
 
 interface WarehouseState {
   rows: MaterialRow[];
@@ -34,6 +34,7 @@ interface WarehouseState {
     spreadsheetName: string;
     sheetName: string;
     mimsSheetName: string;
+    mimsGid?: string;
     gid: string;
     googleSheetUrl: string;
     lastSyncedAt: string;
@@ -265,9 +266,10 @@ function saveState(state: WarehouseState): void {
   if (!state.sheetConfig.sheetName || state.sheetConfig.sheetName === 'MATERIAL') {
     state.sheetConfig.sheetName = 'MATERIAL_MASUK';
   }
-  if (!state.sheetConfig.mimsSheetName) {
-    state.sheetConfig.mimsSheetName = 'EKSEKUSI_MIMS';
+  if (!state.sheetConfig.mimsSheetName || state.sheetConfig.mimsSheetName === 'EKSEKUSI_MIMS') {
+    state.sheetConfig.mimsSheetName = 'MATERIAL_KELUAR';
   }
+  state.sheetConfig.mimsGid = '164626621';
   fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf8');
   const csvContent = buildCsvContent(state.rows);
   fs.writeFileSync(EXPORT_CSV_PATH, csvContent, 'utf8');
@@ -299,9 +301,10 @@ function loadState(): WarehouseState {
         if (!parsed.sheetConfig.sheetName || parsed.sheetConfig.sheetName === 'MATERIAL') {
           parsed.sheetConfig.sheetName = 'MATERIAL_MASUK';
         }
-        if (!parsed.sheetConfig.mimsSheetName) {
-          parsed.sheetConfig.mimsSheetName = 'EKSEKUSI_MIMS';
+        if (!parsed.sheetConfig.mimsSheetName || parsed.sheetConfig.mimsSheetName === 'EKSEKUSI_MIMS') {
+          parsed.sheetConfig.mimsSheetName = 'MATERIAL_KELUAR';
         }
+        parsed.sheetConfig.mimsGid = '164626621';
         return parsed;
       }
     } catch (e) {
@@ -332,7 +335,8 @@ function loadState(): WarehouseState {
     sheetConfig: {
       spreadsheetName: 'LOGISTIK_SINJAI',
       sheetName: 'MATERIAL_MASUK',
-      mimsSheetName: 'EKSEKUSI_MIMS',
+      mimsSheetName: 'MATERIAL_KELUAR',
+      mimsGid: '164626621',
       gid: '0',
       googleSheetUrl: '',
       lastSyncedAt: formatNowTimestamp(),
@@ -960,7 +964,7 @@ async function startServer() {
         statusColO: 'TERPAKAI',
         rowNumber: row.rowNumber,
         mimsRowNumber: newMimsRow.mimsRowNumber,
-        message: `MATERIAL KELUAR: Baris #${row.rowNumber} (SN: ${row.snMaterial}) pada Sheet "MATERIAL_MASUK" diubah menjadi "TERPAKAI" dan masuk ke Sheet "EKSEKUSI_MIMS".`,
+        message: `MATERIAL KELUAR: Baris #${row.rowNumber} (SN: ${row.snMaterial}) pada Sheet "MATERIAL_MASUK" diubah menjadi "TERPAKAI" dan masuk ke Sheet "MATERIAL_KELUAR" (gid=164626621).`,
         petugas,
         noDokumen,
       });
@@ -978,7 +982,7 @@ async function startServer() {
       eksekusiMimsRows: warehouseState.eksekusiMimsRows,
       stats: computeStats(warehouseState),
       logs: warehouseState.logs.slice(0, 150),
-      message: `Berhasil mengimport pengeluaran ${updatedRows.length} unit material. Status pada Sheet "MATERIAL_MASUK" berubah dari "STOK SIAP" menjadi "TERPAKAI" dan tercatat di "EKSEKUSI_MIMS".`,
+      message: `Berhasil mengimport pengeluaran ${updatedRows.length} unit material. Status pada Sheet "MATERIAL_MASUK" berubah dari "STOK SIAP" menjadi "TERPAKAI" dan tercatat di Sheet "MATERIAL_KELUAR" (gid=164626621).`,
     });
   });
 
@@ -1025,7 +1029,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="LOGISTIK_SINJAI_EKSEKUSI_MIMS.csv"'
+      'attachment; filename="LOGISTIK_SINJAI_MATERIAL_KELUAR.csv"'
     );
     res.send(csvData);
   });
@@ -1132,7 +1136,8 @@ async function startServer() {
     warehouseState.sheetConfig = {
       spreadsheetName: String(spreadsheetName || 'LOGISTIK_SINJAI'),
       sheetName: String(sheetName || 'MATERIAL_MASUK'),
-      mimsSheetName: 'EKSEKUSI_MIMS',
+      mimsSheetName: 'MATERIAL_KELUAR',
+      mimsGid: '164626621',
       gid: '0',
       googleSheetUrl: String(googleSheetUrl || warehouseState.sheetConfig.googleSheetUrl),
       lastSyncedAt: formatNowTimestamp(),

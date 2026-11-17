@@ -482,19 +482,26 @@ export async function readMaterialRowsFromGoogleSheet(
   return rows;
 }
 
+export const MATERIAL_KELUAR_GID = 164626621;
+
 export async function ensureEksekusiMimsSheetAndHeader(
   accessToken: string,
   spreadsheetId: string,
-  mimsTabTitle = 'EKSEKUSI_MIMS'
-): Promise<void> {
+  mimsTabTitle = 'MATERIAL_KELUAR'
+): Promise<string> {
   const meta = await getSpreadsheetMetadata(accessToken, spreadsheetId);
-  const hasMimsSheet = meta.sheets.some(
-    (s) => s.title.toUpperCase() === mimsTabTitle.toUpperCase()
-  );
+  const matchedSheet =
+    meta.sheets.find((s) => s.title.toUpperCase() === 'MATERIAL_KELUAR') ||
+    meta.sheets.find((s) => s.sheetId === MATERIAL_KELUAR_GID) ||
+    meta.sheets.find((s) => s.title.toUpperCase() === mimsTabTitle.toUpperCase()) ||
+    meta.sheets.find((s) => s.title.toUpperCase() === 'EKSEKUSI_MIMS');
 
-  if (!hasMimsSheet) {
-    // Create the EKSEKUSI_MIMS sheet tab automatically if not present
-    await fetch(
+  let resolvedTitle = matchedSheet ? matchedSheet.title : mimsTabTitle || 'MATERIAL_KELUAR';
+
+  if (!matchedSheet) {
+    resolvedTitle = 'MATERIAL_KELUAR';
+    // Create the MATERIAL_KELUAR (gid=164626621) sheet tab automatically if not present
+    const addRes = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
         spreadsheetId
       )}:batchUpdate`,
@@ -509,7 +516,8 @@ export async function ensureEksekusiMimsSheetAndHeader(
             {
               addSheet: {
                 properties: {
-                  title: mimsTabTitle,
+                  sheetId: MATERIAL_KELUAR_GID,
+                  title: resolvedTitle,
                   gridProperties: {
                     rowCount: 1000,
                     columnCount: 18,
@@ -522,10 +530,42 @@ export async function ensureEksekusiMimsSheetAndHeader(
         }),
       }
     );
+
+    if (!addRes.ok) {
+      // Fallback without fixed sheetId in case gid already exists under another tab
+      await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                addSheet: {
+                  properties: {
+                    title: resolvedTitle,
+                    gridProperties: {
+                      rowCount: 1000,
+                      columnCount: 18,
+                      frozenRowCount: 1,
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+        }
+      );
+    }
   }
 
-  // Check if Row 1 of EKSEKUSI_MIMS is empty; if empty, write the 18-column MIMS header
-  const headerRange = encodeURIComponent(`${mimsTabTitle}!A1:R1`);
+  // Check if Row 1 of MATERIAL_KELUAR is empty; if empty, write the 18-column header
+  const headerRange = encodeURIComponent(`${resolvedTitle}!A1:R1`);
   const checkRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -565,19 +605,25 @@ export async function ensureEksekusiMimsSheetAndHeader(
       }
     );
   }
+
+  return resolvedTitle;
 }
 
 export async function appendMimsRowsToGoogleSheet(
   accessToken: string,
   spreadsheetId: string,
   mimsRows: EksekusiMimsRow[],
-  mimsTabTitle = 'EKSEKUSI_MIMS'
-): Promise<void> {
-  if (mimsRows.length === 0) return;
-  await ensureEksekusiMimsSheetAndHeader(accessToken, spreadsheetId, mimsTabTitle);
+  mimsTabTitle = 'MATERIAL_KELUAR'
+): Promise<string> {
+  if (mimsRows.length === 0) return mimsTabTitle;
+  const resolvedTitle = await ensureEksekusiMimsSheetAndHeader(
+    accessToken,
+    spreadsheetId,
+    mimsTabTitle
+  );
 
   const values = mimsRows.map((r) => mimsRowToSheetValues(r));
-  const appendRange = encodeURIComponent(`${mimsTabTitle}!A:R`);
+  const appendRange = encodeURIComponent(`${resolvedTitle}!A:R`);
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -599,25 +645,30 @@ export async function appendMimsRowsToGoogleSheet(
     const errData = await res.json().catch(() => ({}));
     throw new Error(
       errData?.error?.message ||
-        `Gagal menulis baris ke Sheet "${mimsTabTitle}" di Google Sheets (${res.status})`
+        `Gagal menulis baris ke Sheet "${resolvedTitle}" di Google Sheets (${res.status})`
     );
   }
+  return resolvedTitle;
 }
 
 export async function overwriteEksekusiMimsSheetRows(
   accessToken: string,
   spreadsheetId: string,
   mimsRows: EksekusiMimsRow[],
-  mimsTabTitle = 'EKSEKUSI_MIMS'
-): Promise<void> {
-  await ensureEksekusiMimsSheetAndHeader(accessToken, spreadsheetId, mimsTabTitle);
+  mimsTabTitle = 'MATERIAL_KELUAR'
+): Promise<string> {
+  const resolvedTitle = await ensureEksekusiMimsSheetAndHeader(
+    accessToken,
+    spreadsheetId,
+    mimsTabTitle
+  );
 
   const allValues: string[][] = [
     EKSEKUSI_MIMS_HEADERS,
     ...mimsRows.map((r) => mimsRowToSheetValues(r)),
   ];
 
-  const clearRange = encodeURIComponent(`${mimsTabTitle}!A1:R5000`);
+  const clearRange = encodeURIComponent(`${resolvedTitle}!A1:R5000`);
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -631,7 +682,7 @@ export async function overwriteEksekusiMimsSheetRows(
     }
   );
 
-  const updateRange = encodeURIComponent(`${mimsTabTitle}!A1`);
+  const updateRange = encodeURIComponent(`${resolvedTitle}!A1`);
   const updateRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
       spreadsheetId
@@ -653,9 +704,10 @@ export async function overwriteEksekusiMimsSheetRows(
     const errData = await updateRes.json().catch(() => ({}));
     throw new Error(
       errData?.error?.message ||
-        `Gagal menyinkronkan Sheet "${mimsTabTitle}" ke Google Sheets (${updateRes.status})`
+        `Gagal menyinkronkan Sheet "${resolvedTitle}" ke Google Sheets (${updateRes.status})`
     );
   }
+  return resolvedTitle;
 }
 
 export async function createNewWarehouseGoogleSheet(
@@ -688,8 +740,8 @@ export async function createNewWarehouseGoogleSheet(
         },
         {
           properties: {
-            sheetId: 1,
-            title: 'EKSEKUSI_MIMS',
+            sheetId: MATERIAL_KELUAR_GID,
+            title: 'MATERIAL_KELUAR',
             gridProperties: {
               rowCount: Math.max(1000, mimsRows.length + 100),
               columnCount: 18,
@@ -712,7 +764,7 @@ export async function createNewWarehouseGoogleSheet(
   const spreadsheetId: string = created.spreadsheetId;
 
   await overwriteGoogleSheetRows(accessToken, spreadsheetId, 'MATERIAL_MASUK', rows);
-  await overwriteEksekusiMimsSheetRows(accessToken, spreadsheetId, mimsRows, 'EKSEKUSI_MIMS');
+  await overwriteEksekusiMimsSheetRows(accessToken, spreadsheetId, mimsRows, 'MATERIAL_KELUAR');
 
   return {
     spreadsheetId,
@@ -728,8 +780,8 @@ export async function createNewWarehouseGoogleSheet(
         columnCount: 15,
       },
       {
-        sheetId: 1,
-        title: 'EKSEKUSI_MIMS',
+        sheetId: MATERIAL_KELUAR_GID,
+        title: 'MATERIAL_KELUAR',
         rowCount: mimsRows.length + 1,
         columnCount: 18,
       },
@@ -970,9 +1022,9 @@ export async function updateOutboundStatusInGoogleSheet(
     );
   }
 
-  // 2. Automatically append the outgoing material rows + timestamp to Sheet "EKSEKUSI_MIMS"
+  // 2. Automatically append the outgoing material rows + timestamp to Sheet "MATERIAL_KELUAR" (gid=164626621)
   if (addedMimsRows.length > 0) {
-    await appendMimsRowsToGoogleSheet(accessToken, spreadsheetId, addedMimsRows, 'EKSEKUSI_MIMS');
+    await appendMimsRowsToGoogleSheet(accessToken, spreadsheetId, addedMimsRows, 'MATERIAL_KELUAR');
   }
   return actualTab;
 }

@@ -24,7 +24,7 @@ export interface MaterialRow {
 }
 
 export interface EksekusiMimsRow {
-  mimsRowNumber: number; // 1-based spreadsheet row number in Sheet "EKSEKUSI_MIMS" (starts at 2)
+  mimsRowNumber: number; // 1-based spreadsheet row number in Sheet "MATERIAL_KELUAR" gid=164626621 (starts at 2)
   timestampEksekusi: string; // Col A: TIMESTAMP EKSEKUSI (YYYY-MM-DD HH:mm:ss)
   snMaterial: string; // Col B: SN MATERIAL
   noMaterial: string; // Col C: NO MATERIAL

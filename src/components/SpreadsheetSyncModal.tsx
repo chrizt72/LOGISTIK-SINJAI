@@ -98,7 +98,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
 }) => {
   const [urlInput, setUrlInput] = useState(sheetConfig.googleSheetUrl || '');
   const [newSheetTitle, setNewSheetTitle] = useState(
-    'LOGISTIK_SINJAI - MATERIAL_MASUK & EKSEKUSI_MIMS'
+    'LOGISTIK_SINJAI - MATERIAL_MASUK & MATERIAL_KELUAR'
   );
   const [driveFiles, setDriveFiles] = useState<DriveSpreadsheetFile[]>([]);
   const [isLoadingDrive, setIsLoadingDrive] = useState(false);
@@ -237,7 +237,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
           <div className="flex items-center gap-2.5 min-w-0">
             <FileSpreadsheet className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-              Integrasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;EKSEKUSI_MIMS&quot;
+              Integrasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;MATERIAL_KELUAR&quot;
             </h3>
           </div>
           <button
@@ -255,14 +255,18 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
           <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/70 space-y-1.5 text-xs">
             <div className="flex items-center gap-2 font-bold text-amber-950 dark:text-amber-200">
               <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Sinkronisasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;EKSEKUSI_MIMS&quot;</span>
+              <span>
+                Sinkronisasi Sheet &quot;MATERIAL_MASUK&quot; (gid=0) &amp; &quot;MATERIAL_KELUAR&quot;
+                (gid=164626621)
+              </span>
             </div>
             <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
               Setiap kali <strong>Material Masuk</strong> di-scan QR, baris baru ditambahkan ke Sheet{' '}
-              <code className="font-mono font-bold">MATERIAL_MASUK</code> dengan keterangan{' '}
+              <code className="font-mono font-bold">MATERIAL_MASUK</code> (gid=0) dengan keterangan{' '}
               <strong>STOK SIAP</strong>. Saat <strong>Material Keluar</strong> di-scan QR, statusnya
-              pada <code className="font-mono font-bold">MATERIAL_MASUK</code> berubah dari{' '}
-              <strong>STOK SIAP</strong> menjadi <strong>TERPAKAI</strong>.
+              pada <code className="font-mono font-bold">MATERIAL_MASUK</code> berubah menjadi{' '}
+              <strong>TERPAKAI</strong> dan otomatis tercatat ke Sheet{' '}
+              <code className="font-mono font-bold">MATERIAL_KELUAR</code> (gid=164626621).
             </p>
           </div>
 
@@ -275,8 +279,8 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   {googleUser && accessToken && !needsAuth
-                    ? `Terhubung sebagai ${googleUser.displayName || googleUser.email} (${googleUser.email}). Mendukung penulisan otomatis ke Sheet MATERIAL_MASUK & EKSEKUSI_MIMS.`
-                    : 'Masuk dengan Google untuk menyinkronkan Sheet MATERIAL_MASUK & EKSEKUSI_MIMS langsung ke Google Spreadsheet Anda.'}
+                    ? `Terhubung sebagai ${googleUser.displayName || googleUser.email} (${googleUser.email}). Mendukung penulisan otomatis ke Sheet MATERIAL_MASUK (gid=0) & MATERIAL_KELUAR (gid=164626621).`
+                    : 'Masuk dengan Google untuk menyinkronkan Sheet MATERIAL_MASUK & MATERIAL_KELUAR (gid=164626621) langsung ke Google Spreadsheet Anda.'}
                 </p>
               </div>
 
@@ -526,8 +530,8 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
 
               <div className="pt-2 border-t border-emerald-200/70 dark:border-emerald-800/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
                 <span className="text-xs text-slate-700 dark:text-slate-300">
-                  Sheet <code className="font-mono font-bold">EKSEKUSI_MIMS</code> ({mimsRowsCount}{' '}
-                  baris keluar):
+                  Sheet <code className="font-mono font-bold">MATERIAL_KELUAR</code> (gid=164626621 ·{' '}
+                  {mimsRowsCount} baris keluar):
                 </span>
                 <button
                   type="button"
@@ -537,7 +541,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                   className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors flex items-center justify-center gap-1.5"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>Format &amp; Kirim ke Tab EKSEKUSI_MIMS</span>
+                  <span>Format &amp; Kirim ke Tab MATERIAL_KELUAR</span>
                 </button>
               </div>
             </div>
@@ -554,8 +558,8 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Membuat file Google Spreadsheet baru dengan Tab{' '}
-                  <code className="font-mono">MATERIAL_MASUK</code> ({totalRows} baris) dan Tab{' '}
-                  <code className="font-mono">EKSEKUSI_MIMS</code> ({mimsRowsCount} baris).
+                  <code className="font-mono">MATERIAL_MASUK</code> (gid=0 · {totalRows} baris) dan Tab{' '}
+                  <code className="font-mono">MATERIAL_KELUAR</code> (gid=164626621 · {mimsRowsCount} baris).
                 </p>
                 <input
                   type="text"
@@ -666,11 +670,11 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
               </a>
               <a
                 href="/api/export/eksekusi-mims-csv"
-                download="LOGISTIK_SINJAI_EKSEKUSI_MIMS.csv"
+                download="LOGISTIK_SINJAI_MATERIAL_KELUAR.csv"
                 className="min-h-[44px] px-3.5 py-2 text-xs font-semibold text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 <Download className="w-4 h-4" />
-                <span>Unduh CSV EKSEKUSI_MIMS ({mimsRowsCount})</span>
+                <span>Unduh CSV MATERIAL_KELUAR ({mimsRowsCount})</span>
               </a>
               <button
                 type="button"

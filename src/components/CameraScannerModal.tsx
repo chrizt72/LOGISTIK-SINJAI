@@ -6,9 +6,9 @@ import {
   AlertCircle,
   RefreshCw,
   QrCode,
-  Layers,
   ImageUp,
   SwitchCamera,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface CameraScannerModalProps {
@@ -16,8 +16,7 @@ interface CameraScannerModalProps {
   onClose: () => void;
   onDetected: (rawQrPayload: string) => void;
   modeLabel: string;
-  sampleSingleSn?: string;
-  sampleBundleSns?: string[];
+  currentListCount?: number;
 }
 
 export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
@@ -25,14 +24,13 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
   onClose,
   onDetected,
   modeLabel,
-  sampleSingleSn = 'PLN0219000022402639005330251',
-  sampleBundleSns = [],
+  currentListCount = 0,
 }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState<boolean>(false);
   const [cameras, setCameras] = useState<{ id: string; label: string }[]>([]);
   const [selectedCameraIdx, setSelectedCameraIdx] = useState<number>(0);
-  const [manualBundleText, setManualBundleText] = useState<string>('');
+  const [manualSnText, setManualSnText] = useState<string>('');
   const [showManualInput, setShowManualInput] = useState<boolean>(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -124,7 +122,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             }
             lastScannedRef.current = { text: cleaned, time: now };
 
-            // Otomatis tutup kamera dan munculkan Popup Deretan SN yang Terscan
+            // Otomatis masukkan hasil scan ke dalam List dan tampilkan daftar
             onCloseRef.current();
             onDetectedRef.current(cleaned);
           },
@@ -139,7 +137,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
               ? err.message
               : 'Kamera tidak dapat diakses pada perangkat ini.';
           setErrorMsg(
-            `Kamera tidak dapat dibuka (${message}). Anda dapat memilih foto QR Code dari galeri atau menggunakan tombol uji scan di bawah.`
+            `Kamera tidak dapat dibuka (${message}). Anda dapat memilih foto QR Code dari galeri atau memasukkan SN di bawah.`
           );
         }
       } finally {
@@ -191,24 +189,6 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
     }
   };
 
-  const handleSimulateSingleQr = () => {
-    onClose();
-    onDetected(sampleSingleSn);
-  };
-
-  const handleSimulateBundleQr = () => {
-    let list = sampleBundleSns.slice(0, 10);
-    if (list.length === 0) {
-      list = Array.from({ length: 10 }, (_, idx) => {
-        const num = String(5330251 + idx).padStart(7, '0');
-        return `PLN021900002240263900${num}`;
-      });
-    }
-    const bundlePayload = list.join('\n');
-    onClose();
-    onDetected(bundlePayload);
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/80 backdrop-blur-xs p-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] sm:p-4"
@@ -228,10 +208,10 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             <Camera className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
             <div className="min-w-0">
               <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-                Kamera Scan QR Code — {modeLabel}
+                Scan QR Code — {modeLabel}
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                Mendukung QR Tunggal (1 SN) &amp; QR Bundle (1–20 SN)
+                Arahkan kamera ke QR Code, hasil scan otomatis masuk ke dalam List
               </p>
             </div>
           </div>
@@ -260,23 +240,19 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
         </div>
 
         <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto">
-          {/* Supported QR Types Info */}
-          <div className="grid grid-cols-2 gap-2 text-[11px]">
-            <div className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/70 flex items-center gap-2">
-              <QrCode className="w-4 h-4 text-emerald-600 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-900 dark:text-white">QR Material Tunggal</div>
-                <div className="text-slate-500 dark:text-slate-400">Menampilkan 1 SN</div>
+          {currentListCount > 0 && (
+            <div className="p-2.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 flex items-center justify-between gap-2 text-xs text-sky-950 dark:text-sky-100">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-sky-600 shrink-0" />
+                <span className="font-semibold">
+                  Menambah Scan Material ke List Saat Ini
+                </span>
               </div>
+              <span className="font-mono font-bold px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-700">
+                {currentListCount} SN di List
+              </span>
             </div>
-            <div className="p-2.5 rounded-xl bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200/80 dark:border-sky-800/70 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-sky-600 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-900 dark:text-white">QR Bundle Material</div>
-                <div className="text-slate-500 dark:text-slate-400">Berisi 1 s/d 20 SN sekaligus</div>
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* Camera Viewport */}
           <div className="relative w-full min-h-[250px] bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center border-2 border-sky-500/70">
@@ -284,7 +260,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             {isStarting && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-300 text-xs bg-slate-950/85">
                 <RefreshCw className="w-6 h-6 animate-spin text-sky-400" />
-                <span>Mengaktifkan kamera belakang untuk membaca QR Code...</span>
+                <span>Mengaktifkan kamera untuk membaca QR Code...</span>
               </div>
             )}
           </div>
@@ -298,7 +274,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             </div>
           )}
 
-          {/* Scan from Image / Quick Test Buttons for Single & Bundle QR */}
+          {/* Scan from Image or Manual Input */}
           <div className="space-y-2 pt-1">
             <input
               ref={fileInputRef}
@@ -307,75 +283,51 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
               onChange={handleFileUpload}
               className="hidden"
             />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="min-h-[42px] px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
               >
                 <ImageUp className="w-4 h-4 text-sky-600 shrink-0" />
-                <span>Scan Foto QR</span>
+                <span>Pilih Foto QR dari Galeri</span>
               </button>
 
               <button
                 type="button"
-                onClick={handleSimulateSingleQr}
-                className="min-h-[42px] px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                onClick={() => setShowManualInput((prev) => !prev)}
+                className="min-h-[42px] px-3 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
               >
                 <QrCode className="w-4 h-4 shrink-0" />
-                <span>Uji QR Tunggal (1 SN)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSimulateBundleQr}
-                className="min-h-[42px] px-3 py-2 text-xs font-bold text-sky-800 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <Layers className="w-4 h-4 shrink-0" />
-                <span>Uji QR Bundle (10 SN)</span>
+                <span>{showManualInput ? 'Tutup Input Manual' : 'Ketik / Tempel SN Manual'}</span>
               </button>
             </div>
           </div>
 
-          {/* Toggleable Paste Bundle QR Payload */}
-          <div className="pt-1 border-t border-slate-200 dark:border-slate-800">
-            <button
-              type="button"
-              onClick={() => setShowManualInput((prev) => !prev)}
-              className="text-xs font-semibold text-sky-600 dark:text-sky-400 hover:underline"
-            >
-              {showManualInput
-                ? 'Sembunyikan Input Teks QR Bundle'
-                : 'Tempel Hasil Scanner Fisik / Deretan QR Bundle (1–20 SN)'}
-            </button>
-
-            {showManualInput && (
-              <div className="mt-2 space-y-2">
-                <textarea
-                  rows={3}
-                  value={manualBundleText}
-                  onChange={(e) => setManualBundleText(e.target.value)}
-                  placeholder={
-                    'PLN0219000022402639005330251\nPLN0219000022402639005330252\n(1 s/d 20 SN dipisahkan baris baru atau koma)'
-                  }
-                  className="w-full p-2.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!manualBundleText.trim()) return;
-                    const text = manualBundleText.trim();
-                    setManualBundleText('');
-                    onClose();
-                    onDetected(text);
-                  }}
-                  className="w-full min-h-[42px] px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl"
-                >
-                  Proses Deretan SN &amp; Tampilkan Popup List
-                </button>
-              </div>
-            )}
-          </div>
+          {showManualInput && (
+            <div className="space-y-2 pt-1">
+              <textarea
+                rows={3}
+                value={manualSnText}
+                onChange={(e) => setManualSnText(e.target.value)}
+                placeholder="Masukkan 1 atau beberapa SN Material (contoh: PLN0219000022402639005330251)"
+                className="w-full p-2.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!manualSnText.trim()) return;
+                  const text = manualSnText.trim();
+                  setManualSnText('');
+                  onClose();
+                  onDetected(text);
+                }}
+                className="w-full min-h-[42px] px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl"
+              >
+                Tambahkan ke List Material
+              </button>
+            </div>
+          )}
 
           <div className="pt-1">
             <button

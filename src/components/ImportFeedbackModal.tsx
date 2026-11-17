@@ -29,7 +29,7 @@ export interface ImportFeedbackState {
 interface ImportFeedbackModalProps {
   feedback: ImportFeedbackState | null;
   onClose: () => void;
-  onViewInSpreadsheetTable: () => void;
+  onViewInSpreadsheetTable: (targetTab?: 'MATERIAL_MASUK' | 'MATERIAL_KELUAR') => void;
   onScanAgain: () => void;
   onOpenGoogleSyncModal: () => void;
   onRetryGoogleSheetSync?: () => void;
@@ -116,7 +116,7 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
                 Sheet Tujuan
               </div>
               <div className="text-xs sm:text-sm font-mono font-bold text-sky-700 dark:text-sky-300 mt-1 truncate">
-                {isInbound ? 'MATERIAL_MASUK' : 'MATERIAL_MASUK & MIMS'}
+                {isInbound ? 'MATERIAL_MASUK (gid=0)' : 'MATERIAL_KELUAR (gid=164626621)'}
               </div>
             </div>
 
@@ -159,7 +159,7 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
                   </div>
                   <p className="text-[11px] opacity-90 mt-0.5">
                     Tab <code className="font-mono font-bold">{feedback.googleSheetTab}</code>
-                    {!isInbound && ' & Tab EKSEKUSI_MIMS'} telah diperbarui secara real-time.
+                    {!isInbound && ' & Tab MATERIAL_KELUAR (gid=164626621)'} telah diperbarui secara real-time.
                   </p>
                 </div>
               </div>
@@ -208,12 +208,12 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
                   download={
                     isInbound
                       ? 'LOGISTIK_SINJAI_MATERIAL_MASUK.csv'
-                      : 'LOGISTIK_SINJAI_EKSEKUSI_MIMS.csv'
+                      : 'LOGISTIK_SINJAI_MATERIAL_KELUAR.csv'
                   }
                   className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl flex items-center gap-1.5"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Unduh CSV Spreadsheet</span>
+                  <span>Unduh CSV {isInbound ? 'MATERIAL_MASUK' : 'MATERIAL_KELUAR'}</span>
                 </a>
               </div>
             </div>
@@ -302,12 +302,16 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
             type="button"
             onClick={() => {
               onClose();
-              onViewInSpreadsheetTable();
+              onViewInSpreadsheetTable(isInbound ? 'MATERIAL_MASUK' : 'MATERIAL_KELUAR');
             }}
             className="min-h-[46px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-xs"
           >
             <FileSpreadsheet className="w-4 h-4 shrink-0" />
-            <span>Lihat Baris Baru di Tabel Spreadsheet</span>
+            <span>
+              {isInbound
+                ? 'Lihat di Sheet MATERIAL_MASUK'
+                : 'Lihat di Sheet MATERIAL_KELUAR (gid=164626621)'}
+            </span>
             <ArrowRight className="w-4 h-4 shrink-0" />
           </button>
         </div>
