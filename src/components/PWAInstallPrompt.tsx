@@ -49,9 +49,13 @@ export const PWAInstallButton: React.FC = () => {
 
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <Smartphone className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <img
+                  src="/pwa-192x192.png"
+                  alt="Logo SINJAI BENDERANG"
+                  className="w-7 h-7 rounded-full object-cover ring-1 ring-[#facc15] bg-[#083d54] shrink-0"
+                />
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  Instal Pintasan SIMLOG PLN dari Chrome
+                  Instal Aplikasi SINJAI BENDERANG
                 </h3>
               </div>
               <button
@@ -96,7 +100,7 @@ export const PWAInstallButton: React.FC = () => {
                   </li>
                   <li>
                     Ketuk <strong>Tambah</strong> di pojok kanan atas untuk membuat pintasan{' '}
-                    <strong>SIMLOG PLN</strong>.
+                    <strong>SINJAI BENDERANG</strong>.
                   </li>
                 </ol>
               </div>
@@ -117,7 +121,7 @@ export const PWAInstallButton: React.FC = () => {
                       <strong>&quot;Instal aplikasi&quot;</strong>.
                     </li>
                     <li>
-                      Ketuk <strong>Instal</strong> — pintasan <strong>SIMLOG PLN</strong> akan
+                      Ketuk <strong>Instal</strong> — pintasan <strong>SINJAI BENDERANG</strong> akan
                       muncul di layar utama HP seperti aplikasi native.
                     </li>
                   </ol>
@@ -130,7 +134,7 @@ export const PWAInstallButton: React.FC = () => {
                   </div>
                   <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
                     <li>
-                      Klik ikon <strong>Instal SIMLOG PLN</strong> (ikon monitor dengan panah unduh)
+                      Klik ikon <strong>Instal SINJAI BENDERANG</strong> (ikon monitor dengan panah unduh)
                       di sisi kanan kolom URL (Address Bar) Chrome.
                     </li>
                     <li>

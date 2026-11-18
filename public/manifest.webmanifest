@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "SIMLOG PLN ULP Sinjai — Monitoring Material Gudang",
-  "short_name": "SIMLOG PLN",
-  "description": "Aplikasi monitoring stok material masuk dan keluar berbasis scan barcode Serial Number (SN) untuk Gudang Logistik PLN ULP Sinjai.",
+  "name": "SINJAI BENDERANG — PLN ULP Sinjai",
+  "short_name": "SINJAI BENDERANG",
+  "description": "Aplikasi terpadu manajemen logistik material gudang, realisasi Yantek, HVB, serta mutasi & sisip trafo PLN UP3 Bulukumba ULP Sinjai.",
   "theme_color": "#0b4f6c",
   "background_color": "#083d54",
   "display": "standalone",
@@ -11,19 +11,19 @@
   "scope": "/",
   "icons": [
     {
-      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
+      "src": "/pwa-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
+      "src": "/pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
+      "src": "/pwa-maskable-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

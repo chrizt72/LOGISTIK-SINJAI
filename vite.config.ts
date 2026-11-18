@@ -21,12 +21,12 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'LOGISTIK EHAO — Monitoring & Rekap Stok Material Gudang',
-          short_name: 'LOGISTIK EHAO',
+          name: 'SINJAI BENDERANG — PLN ULP Sinjai',
+          short_name: 'SINJAI BENDERANG',
           description:
-            'Aplikasi monitoring stok material masuk dan keluar berbasis scan QR Code Serial Number (SN) dan Material Tanpa QR dengan sinkronisasi Sheet MATERIAL_MASUK & MATERIAL_KELUAR.',
-          theme_color: '#0f172a',
-          background_color: '#0f172a',
+            'Aplikasi terpadu manajemen logistik material gudang, realisasi Yantek, HVB, serta mutasi & sisip trafo PLN UP3 Bulukumba ULP Sinjai.',
+          theme_color: '#0b4f6c',
+          background_color: '#083d54',
           display: 'standalone',
           orientation: 'portrait-primary',
           scope: '/',
