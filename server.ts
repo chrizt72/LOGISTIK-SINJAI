@@ -8,21 +8,63 @@ import type {
   MaterialCatalogItem,
   ScanLogEntry,
   MaterialStatus,
+  YantekRealisasiReport,
+  HvbRealisasiReport,
+  YantekDatabaseSegment,
+  YantekWorkItemInput,
 } from './src/types/warehouse.ts';
+import {
+  parseTeknikSinjaiCsv,
+  DEFAULT_TEKNIK_SINJAI_DATA,
+} from './src/data/teknikSinjaiDatabase.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const CSV_SOURCE_PATH = path.resolve(__dirname, 'public/assets/aistudio/LOGISTIK_SINJAI_df21ff73');
+const TEKNIK_SINJAI_CSV_PATH = path.resolve(
+  __dirname,
+  'public/assets/aistudio/TEKNIK_SINJAI_cec1caee'
+);
 const DATA_DIR = path.resolve(__dirname, 'data');
 const STATE_FILE_PATH = path.resolve(DATA_DIR, 'warehouse_state.json');
 const EXPORT_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_MASUK.csv');
 const EXPORT_MIMS_CSV_PATH = path.resolve(DATA_DIR, 'MATERIAL_KELUAR.csv');
+const EXPORT_YANTEK_CSV_PATH = path.resolve(DATA_DIR, 'YANTEK.csv');
+const EXPORT_HVB_CSV_PATH = path.resolve(DATA_DIR, 'HVB.csv');
+
+function loadTeknikSinjaiDatabase(): {
+  segments: YantekDatabaseSegment[];
+  pekerjaanCatalog: string[];
+} {
+  try {
+    if (fs.existsSync(TEKNIK_SINJAI_CSV_PATH)) {
+      const raw = fs.readFileSync(TEKNIK_SINJAI_CSV_PATH, 'utf8');
+      const parsed = parseTeknikSinjaiCsv(raw);
+      if (parsed.segments.length > 0) {
+        return {
+          segments: parsed.segments,
+          pekerjaanCatalog: parsed.pekerjaanCatalog,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Fallback to DEFAULT_TEKNIK_SINJAI_DATA:', err);
+  }
+  return {
+    segments: DEFAULT_TEKNIK_SINJAI_DATA.segments,
+    pekerjaanCatalog: DEFAULT_TEKNIK_SINJAI_DATA.pekerjaanCatalog,
+  };
+}
+
+const TEKNIK_DB = loadTeknikSinjaiDatabase();
 
 interface WarehouseState {
   rows: MaterialRow[];
   eksekusiMimsRows: EksekusiMimsRow[];
+  yantekReports?: YantekRealisasiReport[];
+  hvbReports?: HvbRealisasiReport[];
   logs: ScanLogEntry[];
   counters: {
     inboundAddedCount: number;
@@ -40,6 +82,16 @@ interface WarehouseState {
     lastSyncedAt: string;
   };
   isCleanedV2?: boolean;
+  oauthSession?: {
+    accessToken: string;
+    expiresAt: number;
+    user: {
+      uid: string;
+      email: string | null;
+      displayName: string | null;
+      photoURL: string | null;
+    } | null;
+  } | null;
 }
 
 const MATERIAL_CATALOG: MaterialCatalogItem[] = [
@@ -191,7 +243,7 @@ function parseInitialCsv(): MaterialRow[] {
 
 function buildCsvContent(rows: MaterialRow[]): string {
   const header =
-    'TANGGAL HISTORY,SN MATERIAL,NO MATERIAL,SPESIFIKASI,STATUS TRANSAKSI,KATERGORI,NO BATCH,VALUATION TYPE,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,STOR LOC NAME,STATUS';
+    'TANGGAL MASUK,SN / KODE MATERIAL,NO MATERIAL,NAMA MATERIAL / SPESIFIKASI,METODE INPUT,KATEGORI,NO BATCH,PETUGAS INPUT,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,GUDANG,STATUS KETERANGAN';
   const lines = [header];
   for (const r of rows) {
     lines.push(
@@ -219,7 +271,7 @@ function buildCsvContent(rows: MaterialRow[]): string {
 
 function buildMimsCsvContent(mimsRows: EksekusiMimsRow[]): string {
   const header =
-    'TIMESTAMP EKSEKUSI,SN MATERIAL,NO MATERIAL,SPESIFIKASI,STATUS TRANSAKSI,KATERGORI,NO BATCH,VALUATION TYPE,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,STOR LOC NAME,STATUS,NO DOKUMEN / BON,PETUGAS EKSEKUSI,REF BARIS MATERIAL_MASUK';
+    'TIMESTAMP KELUAR,SN / KODE MATERIAL,NO MATERIAL,NAMA MATERIAL / SPESIFIKASI,METODE KELUAR,KATEGORI,NO BATCH,JENIS PENILAIAN,PLANT,STOR LOC,COMPANY CODE,UNIT INDUK,UNIT,GUDANG,STATUS KETERANGAN,NO BON / PK PENGELUARAN,NAMA PETUGAS SCAN,REF BARIS MATERIAL_MASUK';
   const lines = [header];
   for (const r of mimsRows) {
     lines.push(
@@ -248,12 +300,93 @@ function buildMimsCsvContent(mimsRows: EksekusiMimsRow[]): string {
   return lines.join('\r\n') + '\r\n';
 }
 
+function escapeCsvCell(val: string | number): string {
+  const s = String(val ?? '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
+  const header =
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (UNIT),NAMA PETUGAS,PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,JUMLAH REALISASI WO,JUMLAH REALISASI P0,STATUS LAPORAN';
+  const lines = [header];
+  for (const r of reports) {
+    const items =
+      r.pekerjaanList.length > 0
+        ? r.pekerjaanList
+        : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
+
+    for (const item of items) {
+      lines.push(
+        [
+          escapeCsvCell(r.timestampLaporan),
+          escapeCsvCell(r.tanggalLaporan),
+          escapeCsvCell(r.unitPelaksana),
+          escapeCsvCell(r.petugasPelapor || '-'),
+          escapeCsvCell(r.penyulang),
+          escapeCsvCell(r.keypoint),
+          escapeCsvCell(r.segment),
+          escapeCsvCell(r.panjangKms || '-'),
+          escapeCsvCell(item.detailPekerjaan),
+          escapeCsvCell(item.volume),
+          escapeCsvCell(r.koordinatAwal),
+          escapeCsvCell(r.koordinatAkhir),
+          escapeCsvCell(r.realisasiWo),
+          escapeCsvCell(r.realisasiP0),
+          'SELESAI',
+        ].join(',')
+      );
+    }
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
+  const header =
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (HVB),PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,STATUS LAPORAN';
+  const lines = [header];
+  for (const r of reports) {
+    const items =
+      r.pekerjaanList.length > 0
+        ? r.pekerjaanList
+        : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
+
+    for (const item of items) {
+      lines.push(
+        [
+          escapeCsvCell(r.timestampLaporan),
+          escapeCsvCell(r.tanggalLaporan),
+          escapeCsvCell(r.unitPelaksana),
+          escapeCsvCell(r.penyulang),
+          escapeCsvCell(r.keypoint),
+          escapeCsvCell(r.segment),
+          escapeCsvCell(r.panjangKms || '-'),
+          escapeCsvCell(item.detailPekerjaan),
+          escapeCsvCell(item.volume),
+          escapeCsvCell(r.koordinatAwal),
+          escapeCsvCell(r.koordinatAkhir),
+          'SELESAI',
+        ].join(',')
+      );
+    }
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
 function saveState(state: WarehouseState): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
   if (!Array.isArray(state.eksekusiMimsRows)) {
     state.eksekusiMimsRows = [];
+  }
+  if (!Array.isArray(state.yantekReports)) {
+    state.yantekReports = [];
+  }
+  if (!Array.isArray(state.hvbReports)) {
+    state.hvbReports = [];
   }
   state.rows.forEach((r: MaterialRow, idx: number) => {
     r.rowNumber = idx + 2;
@@ -276,12 +409,18 @@ function saveState(state: WarehouseState): void {
   fs.writeFileSync(EXPORT_CSV_PATH, csvContent, 'utf8');
   const mimsCsvContent = buildMimsCsvContent(state.eksekusiMimsRows);
   fs.writeFileSync(EXPORT_MIMS_CSV_PATH, mimsCsvContent, 'utf8');
+  const yantekCsvContent = buildYantekCsvContent(state.yantekReports);
+  fs.writeFileSync(EXPORT_YANTEK_CSV_PATH, yantekCsvContent, 'utf8');
+  const hvbCsvContent = buildHvbCsvContent(state.hvbReports);
+  fs.writeFileSync(EXPORT_HVB_CSV_PATH, hvbCsvContent, 'utf8');
 }
 
 function createCleanWarehouseState(): WarehouseState {
   return {
     rows: [],
     eksekusiMimsRows: [],
+    yantekReports: [],
+    hvbReports: [],
     logs: [
       {
         id: `clean-log-${Date.now()}`,
@@ -323,6 +462,9 @@ function loadState(): WarehouseState {
       if (parsed && parsed.isCleanedV2 === true && Array.isArray(parsed.rows)) {
         if (!Array.isArray(parsed.eksekusiMimsRows)) {
           parsed.eksekusiMimsRows = [];
+        }
+        if (!Array.isArray(parsed.hvbReports)) {
+          parsed.hvbReports = [];
         }
         parsed.rows = parsed.rows.map((r, idx) => ({
           ...r,
@@ -428,11 +570,345 @@ async function startServer() {
     res.json({
       rows: warehouseState.rows,
       eksekusiMimsRows: warehouseState.eksekusiMimsRows || [],
+      yantekReports: warehouseState.yantekReports || [],
+      hvbReports: warehouseState.hvbReports || [],
+      yantekSegments: TEKNIK_DB.segments,
+      yantekPekerjaanCatalog: TEKNIK_DB.pekerjaanCatalog,
       logs: warehouseState.logs.slice(0, 150),
       stats: computeStats(warehouseState),
       catalog: MATERIAL_CATALOG,
       sheetConfig: warehouseState.sheetConfig,
     });
+  });
+
+  app.get('/api/auth/session', (_req, res) => {
+    const sess = warehouseState.oauthSession;
+    if (!sess || !sess.accessToken || Date.now() >= sess.expiresAt) {
+      return res.json({ active: false, session: null });
+    }
+    return res.json({ active: true, session: sess });
+  });
+
+  app.post('/api/auth/session', (req, res) => {
+    const { accessToken, expiresAt, user } = req.body || {};
+    if (!accessToken || typeof accessToken !== 'string') {
+      return res.status(400).json({ success: false });
+    }
+    warehouseState.oauthSession = {
+      accessToken: accessToken.trim(),
+      expiresAt:
+        typeof expiresAt === 'number' && expiresAt > Date.now()
+          ? expiresAt
+          : Date.now() + 50 * 60 * 1000,
+      user: user
+        ? {
+            uid: String(user.uid || 'google-oauth-user'),
+            email: user.email ? String(user.email) : 'Terhubung via Google OAuth',
+            displayName: user.displayName ? String(user.displayName) : 'Petugas Google Workspace',
+            photoURL: user.photoURL ? String(user.photoURL) : null,
+          }
+        : null,
+    };
+    saveState(warehouseState);
+    return res.json({ success: true, session: warehouseState.oauthSession });
+  });
+
+  app.delete('/api/auth/session', (_req, res) => {
+    warehouseState.oauthSession = null;
+    saveState(warehouseState);
+    return res.json({ success: true });
+  });
+
+  app.get('/api/yantek/data', (_req, res) => {
+    res.json({
+      segments: TEKNIK_DB.segments,
+      pekerjaanCatalog: TEKNIK_DB.pekerjaanCatalog,
+      reports: warehouseState.yantekReports || [],
+    });
+  });
+
+  app.post('/api/yantek/reports', (req, res) => {
+    const {
+      tanggalLaporan,
+      unitPelaksana,
+      petugasPelapor = '',
+      penyulang,
+      keypoint,
+      segment,
+      panjangKms = '',
+      pekerjaanList = [],
+      koordinatAwal = '',
+      koordinatAkhir = '',
+      realisasiWo = 0,
+      realisasiP0 = 0,
+    } = req.body || {};
+
+    if (!unitPelaksana || !segment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unit Pelaksana dan Segment wajib dipilih.',
+      });
+    }
+    if (!String(petugasPelapor).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nama Petugas Pelaksana sesuai tim wajib diisi.',
+      });
+    }
+    if (!Array.isArray(pekerjaanList) || pekerjaanList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimal 1 Detail Pekerjaan dan Volume wajib diisi.',
+      });
+    }
+    if (!String(koordinatAwal).trim() || !String(koordinatAkhir).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Titik Koordinat Awal dan Titik Koordinat Akhir wajib diisi.',
+      });
+    }
+
+    if (!Array.isArray(warehouseState.yantekReports)) {
+      warehouseState.yantekReports = [];
+    }
+
+    const seenYantekNames = new Set<string>();
+    const sanitizedPekerjaan: YantekWorkItemInput[] = [];
+    for (let idx = 0; idx < pekerjaanList.length; idx++) {
+      const p = pekerjaanList[idx];
+      const detail = String(p?.detailPekerjaan || '').trim();
+      const key = detail.toUpperCase();
+      if (!key || seenYantekNames.has(key)) continue;
+      seenYantekNames.add(key);
+      sanitizedPekerjaan.push({
+        id: String(p?.id || `PKJ-${Date.now()}-${idx}`),
+        detailPekerjaan: detail,
+        volume: Number(p?.volume) || 1,
+      });
+    }
+
+    const cleanTanggal =
+      String(tanggalLaporan || '').trim() || new Date().toISOString().slice(0, 10);
+    const cleanUnit = String(unitPelaksana).trim();
+    const cleanPetugas = String(petugasPelapor).trim();
+    const cleanSegment = String(segment).trim();
+    const cleanAwal = String(koordinatAwal).trim();
+    const cleanAkhir = String(koordinatAkhir).trim();
+    const pekerjaanSig = sanitizedPekerjaan
+      .map((p) => `${p.detailPekerjaan.toUpperCase()}:${p.volume}`)
+      .join('|');
+
+    const duplicateExisting = warehouseState.yantekReports.find(
+      (r) =>
+        r.tanggalLaporan === cleanTanggal &&
+        r.unitPelaksana === cleanUnit &&
+        (r.petugasPelapor || '') === cleanPetugas &&
+        r.segment === cleanSegment &&
+        r.koordinatAwal === cleanAwal &&
+        r.koordinatAkhir === cleanAkhir &&
+        r.pekerjaanList
+          .map((p) => `${p.detailPekerjaan.toUpperCase()}:${p.volume}`)
+          .join('|') === pekerjaanSig
+    );
+
+    if (duplicateExisting) {
+      return res.json({
+        success: true,
+        report: duplicateExisting,
+        reports: warehouseState.yantekReports,
+        message: `Laporan Realisasi Yantek (${duplicateExisting.unitPelaksana} · Segmen ${duplicateExisting.segment}) berhasil disimpan.`,
+      });
+    }
+
+    const newReport: YantekRealisasiReport = {
+      id: `YNTK-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      reportRowNumber: warehouseState.yantekReports.length + 2,
+      timestampLaporan: formatNowTimestamp(),
+      tanggalLaporan: cleanTanggal,
+      unitPelaksana: cleanUnit,
+      petugasPelapor: cleanPetugas,
+      penyulang: String(penyulang || '-').trim(),
+      keypoint: String(keypoint || '-').trim(),
+      segment: cleanSegment,
+      panjangKms: String(panjangKms || '').trim(),
+      pekerjaanList: sanitizedPekerjaan,
+      koordinatAwal: cleanAwal,
+      koordinatAkhir: cleanAkhir,
+      realisasiWo: Number(realisasiWo) || 0,
+      realisasiP0: Number(realisasiP0) || 0,
+    };
+
+    warehouseState.yantekReports.unshift(newReport);
+    saveState(warehouseState);
+
+    return res.json({
+      success: true,
+      report: newReport,
+      reports: warehouseState.yantekReports,
+      message: `Laporan Realisasi Yantek (${newReport.unitPelaksana} · Segmen ${newReport.segment}) berhasil disimpan.`,
+    });
+  });
+
+  app.delete('/api/yantek/reports/:id', (req, res) => {
+    const { id } = req.params;
+    if (!Array.isArray(warehouseState.yantekReports)) {
+      warehouseState.yantekReports = [];
+    }
+    warehouseState.yantekReports = warehouseState.yantekReports.filter((r) => r.id !== id);
+    saveState(warehouseState);
+    res.json({
+      success: true,
+      reports: warehouseState.yantekReports,
+    });
+  });
+
+  app.get('/api/export/yantek-csv', (_req, res) => {
+    const csvData = buildYantekCsvContent(warehouseState.yantekReports || []);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="TEKNIK_SINJAI_YANTEK_gid896667653.csv"'
+    );
+    res.send(csvData);
+  });
+
+  app.get('/api/hvb/data', (_req, res) => {
+    res.json({
+      segments: TEKNIK_DB.segments,
+      pekerjaanCatalog: TEKNIK_DB.pekerjaanCatalog,
+      reports: warehouseState.hvbReports || [],
+    });
+  });
+
+  app.post('/api/hvb/reports', (req, res) => {
+    const {
+      tanggalLaporan,
+      unitPelaksana,
+      penyulang,
+      keypoint,
+      segment,
+      panjangKms = '',
+      pekerjaanList = [],
+      koordinatAwal = '',
+      koordinatAkhir = '',
+    } = req.body || {};
+
+    if (!unitPelaksana || !segment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tim Pelaksana HVB dan Segment wajib dipilih.',
+      });
+    }
+    if (!Array.isArray(pekerjaanList) || pekerjaanList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimal 1 Detail Pekerjaan dan Volume wajib diisi.',
+      });
+    }
+    if (!String(koordinatAwal).trim() || !String(koordinatAkhir).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Titik Koordinat Awal dan Titik Koordinat Akhir wajib diisi.',
+      });
+    }
+
+    if (!Array.isArray(warehouseState.hvbReports)) {
+      warehouseState.hvbReports = [];
+    }
+
+    const seenHvbNames = new Set<string>();
+    const sanitizedPekerjaan: YantekWorkItemInput[] = [];
+    for (let idx = 0; idx < pekerjaanList.length; idx++) {
+      const p = pekerjaanList[idx];
+      const detail = String(p?.detailPekerjaan || '').trim();
+      const key = detail.toUpperCase();
+      if (!key || seenHvbNames.has(key)) continue;
+      seenHvbNames.add(key);
+      sanitizedPekerjaan.push({
+        id: String(p?.id || `HVB-PKJ-${Date.now()}-${idx}`),
+        detailPekerjaan: detail,
+        volume: Number(p?.volume) || 1,
+      });
+    }
+
+    const cleanTanggal =
+      String(tanggalLaporan || '').trim() || new Date().toISOString().slice(0, 10);
+    const cleanUnit = String(unitPelaksana).trim();
+    const cleanSegment = String(segment).trim();
+    const cleanAwal = String(koordinatAwal).trim();
+    const cleanAkhir = String(koordinatAkhir).trim();
+    const pekerjaanSig = sanitizedPekerjaan
+      .map((p) => `${p.detailPekerjaan.toUpperCase()}:${p.volume}`)
+      .join('|');
+
+    const duplicateExisting = warehouseState.hvbReports.find(
+      (r) =>
+        r.tanggalLaporan === cleanTanggal &&
+        r.unitPelaksana === cleanUnit &&
+        r.segment === cleanSegment &&
+        r.koordinatAwal === cleanAwal &&
+        r.koordinatAkhir === cleanAkhir &&
+        r.pekerjaanList
+          .map((p) => `${p.detailPekerjaan.toUpperCase()}:${p.volume}`)
+          .join('|') === pekerjaanSig
+    );
+
+    if (duplicateExisting) {
+      return res.json({
+        success: true,
+        report: duplicateExisting,
+        reports: warehouseState.hvbReports,
+        message: `Laporan Realisasi HVB (${duplicateExisting.unitPelaksana} · Segmen ${duplicateExisting.segment}) berhasil disimpan.`,
+      });
+    }
+
+    const newReport: HvbRealisasiReport = {
+      id: `HVB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      reportRowNumber: warehouseState.hvbReports.length + 2,
+      timestampLaporan: formatNowTimestamp(),
+      tanggalLaporan: cleanTanggal,
+      unitPelaksana: cleanUnit,
+      penyulang: String(penyulang || '-').trim(),
+      keypoint: String(keypoint || '-').trim(),
+      segment: cleanSegment,
+      panjangKms: String(panjangKms || '').trim(),
+      pekerjaanList: sanitizedPekerjaan,
+      koordinatAwal: cleanAwal,
+      koordinatAkhir: cleanAkhir,
+    };
+
+    warehouseState.hvbReports.unshift(newReport);
+    saveState(warehouseState);
+
+    return res.json({
+      success: true,
+      report: newReport,
+      reports: warehouseState.hvbReports,
+      message: `Laporan Realisasi HVB (${newReport.unitPelaksana} · Segmen ${newReport.segment}) berhasil disimpan.`,
+    });
+  });
+
+  app.delete('/api/hvb/reports/:id', (req, res) => {
+    const { id } = req.params;
+    if (!Array.isArray(warehouseState.hvbReports)) {
+      warehouseState.hvbReports = [];
+    }
+    warehouseState.hvbReports = warehouseState.hvbReports.filter((r) => r.id !== id);
+    saveState(warehouseState);
+    res.json({
+      success: true,
+      reports: warehouseState.hvbReports,
+    });
+  });
+
+  app.get('/api/export/hvb-csv', (_req, res) => {
+    const csvData = buildHvbCsvContent(warehouseState.hvbReports || []);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="TEKNIK_SINJAI_HVB_gid1954293988.csv"'
+    );
+    res.send(csvData);
   });
 
   app.post('/api/scan/verify', (req, res) => {
@@ -1210,11 +1686,37 @@ async function startServer() {
     });
   });
 
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      success: false,
+      message: `Endpoint API tidak ditemukan: ${req.method} ${req.originalUrl}`,
+    });
+  });
+
   const distPath = path.resolve(__dirname, 'dist');
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd =
+    process.env.NODE_ENV === 'production' ||
+    process.env.npm_lifecycle_event === 'start';
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      plugins: [
+        {
+          name: 'disable-hmr-websocket-error',
+          transform(code, id) {
+            if (id.includes('vite/dist/client/client.mjs')) {
+              return {
+                code: code.replace(
+                  'let isOpened = socket.readyState === socket.OPEN;',
+                  'let isOpened = true;'
+                ),
+                map: null,
+              };
+            }
+            return null;
+          },
+        },
+      ],
       server: {
         middlewareMode: true,
         hmr: false,
@@ -1231,7 +1733,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`LOGISTIK EHAO Server running on http://0.0.0.0:${PORT}`);
+    console.log(`SINJAI BENDERANG Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

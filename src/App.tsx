@@ -29,6 +29,8 @@ import {
   LogOut,
   LogIn,
   Package,
+  Wrench,
+  ClipboardCheck,
 } from 'lucide-react';
 import {
   MaterialRow,
@@ -36,7 +38,13 @@ import {
   MaterialCatalogItem,
   ScanLogEntry,
   WarehouseStats,
+  YantekRealisasiReport,
+  HvbRealisasiReport,
+  YantekDatabaseSegment,
 } from './types/warehouse';
+import { DEFAULT_TEKNIK_SINJAI_DATA } from './data/teknikSinjaiDatabase';
+import { RealisasiYantekView } from './components/RealisasiYantekView';
+import { RealisasiHvbView } from './components/RealisasiHvbView';
 import {
   playScanSuccessBeep,
   playScanErrorAlarm,
@@ -72,17 +80,33 @@ import {
   logoutGoogle,
   SpreadsheetMetadata,
   extractSpreadsheetId,
+  listDriveSpreadsheets,
+  findLogistikSinjaiSpreadsheet,
+  isTeknikSpreadsheetTitle,
   readMaterialRowsFromGoogleSheet,
   createNewWarehouseGoogleSheet,
+  initializeAndFormatEmptySpreadsheet,
   overwriteGoogleSheetRows,
   overwriteEksekusiMimsSheetRows,
   appendInboundRowsToGoogleSheet,
   updateOutboundStatusInGoogleSheet,
+  SPREADSHEET_HEADERS,
   EKSEKUSI_MIMS_HEADERS,
+  REKAP_STOK_HEADERS,
   mimsRowToSheetValues,
+  syncYantekReportsToAllTeknikSheets,
+  syncHvbReportsToAllTeknikSheets,
 } from './services/googleWorkspace';
 
-type ActiveSection = 'masuk' | 'keluar' | 'rekap' | 'spreadsheet' | 'riwayat';
+type ActiveModule = 'logistik' | 'yantek' | 'hvb';
+type ActiveSection =
+  | 'masuk'
+  | 'keluar'
+  | 'rekap'
+  | 'yantek'
+  | 'hvb'
+  | 'spreadsheet'
+  | 'riwayat';
 
 interface ReadyInboundItem {
   snMaterial: string;
@@ -103,6 +127,14 @@ const SELECTED_TAB_STORAGE_KEY = 'simlog_sinjai_selected_tab_v1';
 export default function App() {
   const [rows, setRows] = useState<MaterialRow[]>([]);
   const [eksekusiMimsRows, setEksekusiMimsRows] = useState<EksekusiMimsRow[]>([]);
+  const [yantekReports, setYantekReports] = useState<YantekRealisasiReport[]>([]);
+  const [hvbReports, setHvbReports] = useState<HvbRealisasiReport[]>([]);
+  const [yantekSegments, setYantekSegments] = useState<YantekDatabaseSegment[]>(
+    DEFAULT_TEKNIK_SINJAI_DATA.segments
+  );
+  const [yantekPekerjaanCatalog, setYantekPekerjaanCatalog] = useState<string[]>(
+    DEFAULT_TEKNIK_SINJAI_DATA.pekerjaanCatalog
+  );
   const [logs, setLogs] = useState<ScanLogEntry[]>([]);
   const [stats, setStats] = useState<WarehouseStats | null>(null);
   const [catalog, setCatalog] = useState<MaterialCatalogItem[]>([]);
@@ -116,7 +148,8 @@ export default function App() {
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Navigation & UI state — Tombol "Masuk" berada di posisi pertama/kiri & default aktif
+  // Navigation & UI state — Pisahkan setiap menu (Logistik, Yantek, Realisasi HVB)
+  const [selectedModule, setSelectedModule] = useState<ActiveModule>('logistik');
   const [activeSection, setActiveSection] = useState<ActiveSection>('masuk');
   const [isLoginPageOpen, setIsLoginPageOpen] = useState<boolean>(true);
   const [activeSpreadsheetTab, setActiveSpreadsheetTab] = useState<
@@ -158,7 +191,13 @@ export default function App() {
   const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(() => {
     try {
       const saved = localStorage.getItem(CONNECTED_SHEET_STORAGE_KEY);
-      return saved ? (JSON.parse(saved) as SpreadsheetMetadata) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as SpreadsheetMetadata;
+      // Menu Logistik hanya menggunakan Spreadsheet LOGISTIK SINJAI (bukan TEKNIK SINJAI)
+      if (parsed?.title && isTeknikSpreadsheetTitle(parsed.title)) {
+        return null;
+      }
+      return parsed;
     } catch {
       return null;
     }
@@ -200,6 +239,7 @@ export default function App() {
   const [noDokumen, setNoDokumen] = useState<string>('BON-SINJAI-2026-01');
 
   // Outbound (Material Keluar) State & Kolom List Siap Import
+  const [outboundSubMenu, setOutboundSubMenu] = useState<'scan' | 'manual'>('scan');
   const [outboundScanInput, setOutboundScanInput] = useState<string>('');
   const [outboundNamaMaterial, setOutboundNamaMaterial] = useState<string>('');
   const [outboundNonQrCode, setOutboundNonQrCode] = useState<string>('');
@@ -209,6 +249,7 @@ export default function App() {
   const [isProcessingOutbound, setIsProcessingOutbound] = useState<boolean>(false);
 
   // Inbound (Material Masuk) State & Kolom List Siap Import
+  const [inboundSubMenu, setInboundSubMenu] = useState<'scan' | 'manual'>('scan');
   const [inboundScanInput, setInboundScanInput] = useState<string>('');
   const [inboundNamaMaterial, setInboundNamaMaterial] = useState<string>('');
   const [inboundNonQrCode, setInboundNonQrCode] = useState<string>('');
@@ -233,16 +274,35 @@ export default function App() {
   const fetchWarehouseData = useCallback(async () => {
     try {
       const res = await fetch('/api/materials');
-      if (!res.ok) throw new Error('Gagal memuat data gudang');
-      const data = await res.json();
+      const rawText = await res.text();
+      const trimmed = rawText.trim();
+      if (!res.ok || !trimmed || trimmed.startsWith('<')) {
+        return;
+      }
+      const data = JSON.parse(trimmed);
       setRows(data.rows || []);
       setEksekusiMimsRows(data.eksekusiMimsRows || []);
+      if (Array.isArray(data.yantekReports)) {
+        setYantekReports(data.yantekReports);
+      }
+      if (Array.isArray(data.hvbReports)) {
+        setHvbReports(data.hvbReports);
+      }
+      if (Array.isArray(data.yantekSegments) && data.yantekSegments.length > 0) {
+        setYantekSegments(data.yantekSegments);
+      }
+      if (
+        Array.isArray(data.yantekPekerjaanCatalog) &&
+        data.yantekPekerjaanCatalog.length > 0
+      ) {
+        setYantekPekerjaanCatalog(data.yantekPekerjaanCatalog);
+      }
       setLogs(data.logs || []);
       setStats(data.stats || null);
       setCatalog(data.catalog || []);
       if (data.sheetConfig) setSheetConfig(data.sheetConfig);
     } catch (err) {
-      console.error(err);
+      console.warn('Info sinkronisasi awal:', err);
     } finally {
       setIsLoading(false);
     }
@@ -258,7 +318,6 @@ export default function App() {
         setGoogleUser(user);
         setAccessToken(token);
         setNeedsAuth(false);
-        setIsLoginPageOpen(false);
       },
       () => {
         setGoogleUser(null);
@@ -301,6 +360,7 @@ export default function App() {
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setAuthDomainError(null);
+    setInlineBanner(null);
     try {
       const result = await googleSignIn();
       if (result) {
@@ -308,28 +368,36 @@ export default function App() {
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
         setAuthDomainError(null);
-        setIsLoginPageOpen(false);
         setInlineBanner({
           type: 'success',
           title: 'Berhasil Masuk ke Google Workspace',
-          message: `Terhubung sebagai ${result.user.email}. Sekarang Anda dapat menyinkronkan Sheet "MATERIAL_MASUK" & "MATERIAL_KELUAR" langsung di Google Sheets.`,
+          message: `Terhubung sebagai ${result.user.email}.`,
         });
       }
     } catch (err: any) {
-      console.error('Google Sign-In failed:', err);
-      const msg =
-        err?.message || 'Autentikasi Google dibatalkan atau terkendala otorisasi domain.';
+      const errCode = String(err?.code || '');
+      const msg = String(err?.message || '');
       if (
-        err?.code === 'auth/unauthorized-domain' ||
-        String(msg).includes('unauthorized-domain') ||
-        String(msg).includes('Authorized domains')
+        errCode === 'auth/popup-closed-by-user' ||
+        errCode === 'auth/cancelled-popup-request' ||
+        msg.includes('popup-closed-by-user') ||
+        msg.includes('cancelled-popup-request')
+      ) {
+        // User simply closed the popup window; do not show an error banner
+        return;
+      }
+      if (
+        errCode === 'auth/unauthorized-domain' ||
+        msg.includes('unauthorized-domain') ||
+        msg.includes('Authorized domains')
       ) {
         setAuthDomainError(msg);
       }
       setInlineBanner({
-        type: 'error',
-        title: 'Kendala Login Google di Perangkat Mobile (auth/unauthorized-domain)',
-        message: msg,
+        type: 'warning',
+        title: 'Informasi Login Google',
+        message:
+          'Silakan klik tombol "Login Google Mobile" di bawah untuk melanjutkan otorisasi.',
       });
     } finally {
       setIsSigningIn(false);
@@ -346,11 +414,10 @@ export default function App() {
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
         setAuthDomainError(null);
-        setIsLoginPageOpen(false);
         setInlineBanner({
           type: 'success',
           title: 'Berhasil Masuk via Google OAuth Mobile',
-          message: `Terhubung sebagai ${result.user.email}. Anda kini dapat menyinkronkan Sheet MATERIAL_MASUK & MATERIAL_KELUAR.`,
+          message: `Terhubung sebagai ${result.user.email}. Silakan pilih salah satu menu akses di bawah untuk masuk ke menu yang dituju.`,
         });
       }
     } catch (err: any) {
@@ -373,6 +440,92 @@ export default function App() {
     setIsLoginPageOpen(true);
   };
 
+  // Auto-sync saved Yantek & HVB reports whenever accessToken is active and reports are loaded
+  const lastSyncedYantekTokenKeyRef = useRef<string>('');
+  const lastSyncedHvbTokenKeyRef = useRef<string>('');
+  useEffect(() => {
+    if (!accessToken || needsAuth || isLoading) {
+      return;
+    }
+
+    const yantekKey = `${accessToken.slice(-12)}:${yantekReports.length}`;
+    if (yantekReports.length > 0 && lastSyncedYantekTokenKeyRef.current !== yantekKey) {
+      lastSyncedYantekTokenKeyRef.current = yantekKey;
+      syncYantekReportsToAllTeknikSheets(accessToken, yantekReports).catch(() => {
+        lastSyncedYantekTokenKeyRef.current = '';
+      });
+    }
+
+    const hvbKey = `${accessToken.slice(-12)}:${hvbReports.length}`;
+    if (hvbReports.length > 0 && lastSyncedHvbTokenKeyRef.current !== hvbKey) {
+      lastSyncedHvbTokenKeyRef.current = hvbKey;
+      syncHvbReportsToAllTeknikSheets(accessToken, hvbReports).catch(() => {
+        lastSyncedHvbTokenKeyRef.current = '';
+      });
+    }
+  }, [accessToken, needsAuth, isLoading, hvbReports, yantekReports]);
+
+  // Auto-discover and format empty LOGISTIK_SINJAI spreadsheet ONLY when user is inside Menu Logistik
+  const formattedSpreadsheetIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!accessToken || needsAuth || isLoginPageOpen || selectedModule !== 'logistik') return;
+
+    const autoFormatTargetSpreadsheet = async () => {
+      try {
+        let targetId =
+          connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+            ? connectedSheet.spreadsheetId
+            : '';
+
+        if (!targetId && !isTeknikSpreadsheetTitle(sheetConfig.spreadsheetName || '')) {
+          targetId = extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+        }
+
+        if (!targetId) {
+          const driveFiles = await listDriveSpreadsheets(accessToken).catch(() => []);
+          const matchedSinjai = findLogistikSinjaiSpreadsheet(driveFiles);
+          if (matchedSinjai) {
+            targetId = matchedSinjai.id;
+          }
+        }
+
+        if (targetId && !formattedSpreadsheetIdsRef.current.has(targetId)) {
+          formattedSpreadsheetIdsRef.current.add(targetId);
+          const formattedMeta = await initializeAndFormatEmptySpreadsheet(
+            accessToken,
+            targetId,
+            rows,
+            eksekusiMimsRows
+          );
+          if (isTeknikSpreadsheetTitle(formattedMeta.title)) {
+            return;
+          }
+          setConnectedSheet(formattedMeta);
+          setSelectedSheetTab('MATERIAL_MASUK');
+          setSheetConfig((prev) => ({
+            ...prev,
+            spreadsheetName: formattedMeta.title,
+            sheetName: 'MATERIAL_MASUK',
+            mimsSheetName: 'MATERIAL_KELUAR',
+            googleSheetUrl: formattedMeta.spreadsheetUrl,
+          }));
+        }
+      } catch (err) {
+        console.warn('Auto-format spreadsheet skipped:', err);
+      }
+    };
+
+    autoFormatTargetSpreadsheet();
+  }, [
+    accessToken,
+    needsAuth,
+    isLoginPageOpen,
+    selectedModule,
+    connectedSheet?.spreadsheetId,
+    sheetConfig.googleSheetUrl,
+  ]);
+
   const handlePullFromGoogleSheet = async (
     spreadsheetId: string,
     tabTitle: string,
@@ -384,38 +537,63 @@ export default function App() {
       setNeedsAuth(true);
       return;
     }
-    const pulledRows = await readMaterialRowsFromGoogleSheet(token, spreadsheetId, tabTitle);
+
+    // Format empty sheets and headers first so Sheet1 / empty tabs become MATERIAL_MASUK, MATERIAL_KELUAR, REKAP_STOK
+    const formattedMeta = await initializeAndFormatEmptySpreadsheet(
+      token,
+      spreadsheetId,
+      rows,
+      eksekusiMimsRows
+    ).catch(() => null);
+
+    if (formattedMeta) {
+      setConnectedSheet(formattedMeta);
+    }
+
+    const effectiveTab =
+      tabTitle.toUpperCase() === 'SHEET1' || tabTitle.toUpperCase() === 'LEMBAR1'
+        ? 'MATERIAL_MASUK'
+        : tabTitle;
+    if (effectiveTab !== tabTitle) {
+      setSelectedSheetTab(effectiveTab);
+    }
+
+    const pulledRows = await readMaterialRowsFromGoogleSheet(token, spreadsheetId, effectiveTab);
     if (pulledRows.length === 0) {
       setInlineBanner({
-        type: 'warning',
-        title: `Sheet "${tabTitle}" Kosong`,
-        message: `Sheet "${tabTitle}" pada "${title}" belum memiliki baris material. Klik "Kirim MATERIAL_MASUK" untuk mengisi data awal.`,
+        type: 'success',
+        title: `Spreadsheet Kosong "${title}" Telah Disesuaikan Formatnya!`,
+        message: `Format 3 Sheet ("MATERIAL_MASUK" Kolom A–O, "MATERIAL_KELUAR" Kolom A–R gid=164626621, & "REKAP_STOK" Kolom A–G gid=164626622) telah disesuaikan dengan inputan aplikasi dan siap menerima data Scan & Manual.`,
       });
       return;
     }
 
-    const res = await fetch('/api/sync/import-rows', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rows: pulledRows,
-        spreadsheetName: title,
-        sheetName: tabTitle,
-        googleSheetUrl: url,
-        userEmail: googleUser?.email || '',
-      }),
-    });
-    const data = await res.json();
-    if (data.rows) setRows(data.rows);
-    if (data.stats) setStats(data.stats);
-    if (data.logs) setLogs(data.logs);
-    if (data.sheetConfig) setSheetConfig(data.sheetConfig);
-
-    setInlineBanner({
-      type: 'success',
-      title: `Berhasil Memuat ${pulledRows.length} Baris dari Google Sheets`,
-      message: data.message,
-    });
+    try {
+      const res = await fetch('/api/sync/import-rows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: pulledRows,
+          spreadsheetName: title,
+          sheetName: effectiveTab,
+          googleSheetUrl: url,
+          userEmail: googleUser?.email || '',
+        }),
+      });
+      const rawText = await res.text();
+      const trimmed = rawText.trim();
+      if (trimmed && !trimmed.startsWith('<')) {
+        const data = JSON.parse(trimmed);
+        if (data.rows) setRows(data.rows);
+        if (data.stats) setStats(data.stats);
+        if (data.logs) setLogs(data.logs);
+        if (data.sheetConfig) setSheetConfig(data.sheetConfig);
+      } else {
+        setRows(pulledRows);
+      }
+    } catch {
+      setRows(pulledRows);
+    }
   };
 
   const requestOverwriteGoogleSheet = (
@@ -450,13 +628,13 @@ export default function App() {
   };
 
   const requestCreateNewGoogleSheet = (newTitle: string) => {
-    const cleanTitle = newTitle.trim() || 'LOGISTIK_SINJAI - MATERIAL_MASUK & MATERIAL_KELUAR';
+    const cleanTitle = newTitle.trim() || 'LOGISTIK_SINJAI';
     setPendingSheetsMutation({
       type: 'CREATE_NEW_SHEET',
       title: `Buat File Google Spreadsheet Baru "${cleanTitle}" di Google Drive?`,
-      description: `Sistem akan membuat file Google Spreadsheet baru dengan Sheet "MATERIAL_MASUK" (gid=0 · ${rows.length} baris stok) dan Sheet "MATERIAL_KELUAR" (gid=164626621 · ${eksekusiMimsRows.length} baris material keluar).`,
+      description: `Sistem akan membuat file Google Spreadsheet baru dengan 3 Sheet terformat sesuai inputan aplikasi: "MATERIAL_MASUK" (gid=0 · ${rows.length} baris), "MATERIAL_KELUAR" (gid=164626621 · ${eksekusiMimsRows.length} baris), dan "REKAP_STOK" (gid=164626622).`,
       spreadsheetTitle: cleanTitle,
-      sheetTabName: 'MATERIAL_MASUK & MATERIAL_KELUAR',
+      sheetTabName: 'MATERIAL_MASUK, MATERIAL_KELUAR & REKAP_STOK',
       affectedRows: rows,
       totalCount: rows.length,
       onConfirm: async () => {
@@ -485,7 +663,7 @@ export default function App() {
         setInlineBanner({
           type: 'success',
           title: `File Google Spreadsheet "${meta.title}" Berhasil Dibuat!`,
-          message: `Sheet "MATERIAL_MASUK" (gid=0) & "MATERIAL_KELUAR" (gid=164626621) telah dibuat di Google Drive Anda.`,
+          message: `3 Sheet ("MATERIAL_MASUK" gid=0, "MATERIAL_KELUAR" gid=164626621, & "REKAP_STOK" gid=164626622) telah dibuat di Google Drive Anda.`,
         });
       },
     });
@@ -541,31 +719,41 @@ export default function App() {
   };
 
   const syncInboundToGoogleSheetsDirect = useCallback(
-    async (addedRows: MaterialRow[]) => {
+    async (addedRows: MaterialRow[], allCurrentRows?: MaterialRow[]) => {
       if (addedRows.length === 0) return;
       const token = (await getAccessToken()) || accessToken;
-      const targetSpreadsheetId =
-        connectedSheet?.spreadsheetId || extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
-      const targetTitle =
-        connectedSheet?.title || sheetConfig.spreadsheetName || 'LOGISTIK_SINJAI';
-      const targetUrl =
-        connectedSheet?.spreadsheetUrl ||
-        sheetConfig.googleSheetUrl ||
-        (targetSpreadsheetId
-          ? `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
-          : '');
 
-      if (!token || needsAuth || !targetSpreadsheetId) {
+      if (!token || needsAuth) {
         setImportFeedback((prev) =>
           prev
             ? {
                 ...prev,
                 googleSheetSyncStatus: 'NOT_CONNECTED',
+                googleSheetError: 'Silakan Login akun Google Anda agar data masuk ke Google Sheets.',
               }
             : null
         );
         return;
       }
+
+      let targetSpreadsheetId =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.spreadsheetId
+          : '';
+      if (!targetSpreadsheetId && !isTeknikSpreadsheetTitle(sheetConfig.spreadsheetName || '')) {
+        targetSpreadsheetId = extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+      }
+      let targetTitle =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.title
+          : 'LOGISTIK SINJAI';
+      let targetUrl =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.spreadsheetUrl
+          : targetSpreadsheetId
+          ? sheetConfig.googleSheetUrl ||
+            `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
+          : '';
 
       setImportFeedback((prev) =>
         prev
@@ -575,17 +763,57 @@ export default function App() {
               googleSheetTitle: targetTitle,
               googleSheetTab: selectedSheetTab || 'MATERIAL_MASUK',
               googleSheetUrl: targetUrl,
+              googleSheetError: undefined,
             }
           : null
       );
 
       try {
-        const usedTab = await appendInboundRowsToGoogleSheet(
-          token,
-          targetSpreadsheetId,
-          selectedSheetTab || 'MATERIAL_MASUK',
-          addedRows
-        );
+        let createdFresh = false;
+        if (!targetSpreadsheetId) {
+          const driveFiles = await listDriveSpreadsheets(token).catch(() => []);
+          const matchedSinjai = findLogistikSinjaiSpreadsheet(driveFiles);
+
+          if (matchedSinjai) {
+            targetSpreadsheetId = matchedSinjai.id;
+            targetTitle = matchedSinjai.name;
+            targetUrl =
+              matchedSinjai.webViewLink ||
+              `https://docs.google.com/spreadsheets/d/${matchedSinjai.id}/edit#gid=0`;
+          } else {
+            const createdMeta = await createNewWarehouseGoogleSheet(
+              token,
+              'LOGISTIK SINJAI',
+              allCurrentRows || addedRows,
+              eksekusiMimsRows
+            );
+            formattedSpreadsheetIdsRef.current.add(createdMeta.spreadsheetId);
+            setConnectedSheet(createdMeta);
+            setSelectedSheetTab('MATERIAL_MASUK');
+            setSheetConfig((prev) => ({
+              ...prev,
+              spreadsheetName: createdMeta.title,
+              sheetName: 'MATERIAL_MASUK',
+              mimsSheetName: 'MATERIAL_KELUAR',
+              googleSheetUrl: createdMeta.spreadsheetUrl,
+            }));
+            targetSpreadsheetId = createdMeta.spreadsheetId;
+            targetTitle = createdMeta.title;
+            targetUrl = createdMeta.spreadsheetUrl;
+            createdFresh = true;
+          }
+        }
+
+        const usedTab = createdFresh
+          ? 'MATERIAL_MASUK'
+          : await appendInboundRowsToGoogleSheet(
+              token,
+              targetSpreadsheetId,
+              selectedSheetTab || 'MATERIAL_MASUK',
+              addedRows,
+              allCurrentRows || rows
+            );
+
         setImportFeedback((prev) =>
           prev
             ? {
@@ -594,56 +822,71 @@ export default function App() {
                 googleSheetTitle: targetTitle,
                 googleSheetTab: usedTab,
                 googleSheetUrl: targetUrl,
+                googleSheetError: undefined,
               }
             : null
         );
-        setInlineBanner({
-          type: 'success',
-          title: `Tersimpan Otomatis ke Google Sheets (${targetTitle})!`,
-          message: `${addedRows.length} baris Material Masuk berhasil ditambahkan ke Tab "${usedTab}" dengan status STOK SIAP.`,
-        });
       } catch (err: any) {
+        const errMsg = err?.message || 'Gagal menulis baris ke Google Spreadsheet.';
         setImportFeedback((prev) =>
           prev
             ? {
                 ...prev,
                 googleSheetSyncStatus: 'ERROR',
-                googleSheetError:
-                  err?.message || 'Gagal menulis baris ke Google Spreadsheet.',
+                googleSheetError: errMsg,
               }
             : null
         );
+        setInlineBanner({
+          type: 'error',
+          title: 'Gagal Mengirim Data ke Google Sheets',
+          message: errMsg,
+        });
       }
     },
-    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig]
+    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig, rows, eksekusiMimsRows]
   );
 
   const syncOutboundToGoogleSheetsDirect = useCallback(
-    async (updatedRows: MaterialRow[], addedMims: EksekusiMimsRow[] = []) => {
+    async (
+      updatedRows: MaterialRow[],
+      addedMims: EksekusiMimsRow[] = [],
+      allCurrentRows?: MaterialRow[]
+    ) => {
       if (updatedRows.length === 0) return;
       const token = (await getAccessToken()) || accessToken;
-      const targetSpreadsheetId =
-        connectedSheet?.spreadsheetId || extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
-      const targetTitle =
-        connectedSheet?.title || sheetConfig.spreadsheetName || 'LOGISTIK_SINJAI';
-      const targetUrl =
-        connectedSheet?.spreadsheetUrl ||
-        sheetConfig.googleSheetUrl ||
-        (targetSpreadsheetId
-          ? `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
-          : '');
 
-      if (!token || needsAuth || !targetSpreadsheetId) {
+      if (!token || needsAuth) {
         setImportFeedback((prev) =>
           prev
             ? {
                 ...prev,
                 googleSheetSyncStatus: 'NOT_CONNECTED',
+                googleSheetError: 'Silakan Login akun Google Anda agar data masuk ke Google Sheets.',
               }
             : null
         );
         return;
       }
+
+      let targetSpreadsheetId =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.spreadsheetId
+          : '';
+      if (!targetSpreadsheetId && !isTeknikSpreadsheetTitle(sheetConfig.spreadsheetName || '')) {
+        targetSpreadsheetId = extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+      }
+      let targetTitle =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.title
+          : 'LOGISTIK SINJAI';
+      let targetUrl =
+        connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
+          ? connectedSheet.spreadsheetUrl
+          : targetSpreadsheetId
+          ? sheetConfig.googleSheetUrl ||
+            `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit#gid=0`
+          : '';
 
       setImportFeedback((prev) =>
         prev
@@ -653,18 +896,60 @@ export default function App() {
               googleSheetTitle: targetTitle,
               googleSheetTab: selectedSheetTab || 'MATERIAL_MASUK',
               googleSheetUrl: targetUrl,
+              googleSheetError: undefined,
             }
           : null
       );
 
       try {
-        const usedTab = await updateOutboundStatusInGoogleSheet(
-          token,
-          targetSpreadsheetId,
-          selectedSheetTab || 'MATERIAL_MASUK',
-          updatedRows,
-          addedMims
-        );
+        let createdFresh = false;
+        if (!targetSpreadsheetId) {
+          const driveFiles = await listDriveSpreadsheets(token).catch(() => []);
+          const matchedSinjai = findLogistikSinjaiSpreadsheet(driveFiles);
+
+          if (matchedSinjai) {
+            targetSpreadsheetId = matchedSinjai.id;
+            targetTitle = matchedSinjai.name;
+            targetUrl =
+              matchedSinjai.webViewLink ||
+              `https://docs.google.com/spreadsheets/d/${matchedSinjai.id}/edit#gid=0`;
+          } else {
+            const mergedMims =
+              addedMims.length > 0 ? [...eksekusiMimsRows, ...addedMims] : eksekusiMimsRows;
+            const createdMeta = await createNewWarehouseGoogleSheet(
+              token,
+              'LOGISTIK SINJAI',
+              allCurrentRows || rows,
+              mergedMims
+            );
+            formattedSpreadsheetIdsRef.current.add(createdMeta.spreadsheetId);
+            setConnectedSheet(createdMeta);
+            setSelectedSheetTab('MATERIAL_MASUK');
+            setSheetConfig((prev) => ({
+              ...prev,
+              spreadsheetName: createdMeta.title,
+              sheetName: 'MATERIAL_MASUK',
+              mimsSheetName: 'MATERIAL_KELUAR',
+              googleSheetUrl: createdMeta.spreadsheetUrl,
+            }));
+            targetSpreadsheetId = createdMeta.spreadsheetId;
+            targetTitle = createdMeta.title;
+            targetUrl = createdMeta.spreadsheetUrl;
+            createdFresh = true;
+          }
+        }
+
+        const usedTab = createdFresh
+          ? 'MATERIAL_MASUK'
+          : await updateOutboundStatusInGoogleSheet(
+              token,
+              targetSpreadsheetId,
+              selectedSheetTab || 'MATERIAL_MASUK',
+              updatedRows,
+              addedMims,
+              allCurrentRows || rows
+            );
+
         setImportFeedback((prev) =>
           prev
             ? {
@@ -673,28 +958,29 @@ export default function App() {
                 googleSheetTitle: targetTitle,
                 googleSheetTab: usedTab,
                 googleSheetUrl: targetUrl,
+                googleSheetError: undefined,
               }
             : null
         );
-        setInlineBanner({
-          type: 'success',
-          title: `Status Google Sheets Diperbarui Menjadi TERPAKAI!`,
-          message: `${updatedRows.length} baris diubah menjadi TERPAKAI pada Tab "${usedTab}" & tercatat di Tab "MATERIAL_KELUAR" (gid=164626621).`,
-        });
       } catch (err: any) {
+        const errMsg = err?.message || 'Gagal memperbarui status di Google Spreadsheet.';
         setImportFeedback((prev) =>
           prev
             ? {
                 ...prev,
                 googleSheetSyncStatus: 'ERROR',
-                googleSheetError:
-                  err?.message || 'Gagal memperbarui status di Google Spreadsheet.',
+                googleSheetError: errMsg,
               }
             : null
         );
+        setInlineBanner({
+          type: 'error',
+          title: 'Gagal Mengirim Data Material Keluar ke Google Sheets',
+          message: errMsg,
+        });
       }
     },
-    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig]
+    [connectedSheet, accessToken, needsAuth, selectedSheetTab, sheetConfig, rows, eksekusiMimsRows]
   );
 
   const triggerSound = useCallback(
@@ -768,7 +1054,7 @@ export default function App() {
             noBatch: detectedCat.defaultBatch,
             qrType,
             validationStatus: 'VALID_KELUAR',
-            validationNote: 'Siap Import ke Spreadsheet (Status: TERPAKAI & MATERIAL_KELUAR)',
+            validationNote: 'STOK SIAP → TERPAKAI',
           });
 
           if (!alreadyInReadySet.has(cleanSn)) {
@@ -791,7 +1077,7 @@ export default function App() {
             qrType,
             rowNumber: matchedRow.rowNumber,
             validationStatus: 'SUDAH_TERPAKAI',
-            validationNote: `SUDAH TERPAKAI (Baris #${matchedRow.rowNumber})`,
+            validationNote: 'SUDAH TERPAKAI',
           });
           continue;
         }
@@ -805,7 +1091,7 @@ export default function App() {
           qrType,
           rowNumber: matchedRow.rowNumber,
           validationStatus: 'VALID_KELUAR',
-          validationNote: `Baris #${matchedRow.rowNumber}: STOK SIAP → SIAP DIUBAH KE TERPAKAI`,
+          validationNote: 'STOK SIAP → TERPAKAI',
         });
 
         if (!alreadyInReadySet.has(cleanSn)) {
@@ -821,13 +1107,6 @@ export default function App() {
       if (newReadyToAdd.length > 0) {
         triggerSound('scan');
         setOutboundReadyList((prev) => [...prev, ...newReadyToAdd]);
-        setInlineBanner({
-          type: 'success',
-          title: `${newReadyToAdd.length} Material Otomatis Masuk ke dalam List (${
-            outboundReadyList.length + newReadyToAdd.length
-          } SN Terkumpul)`,
-          message: `Klik "+ Scan Material" jika ada material lain, atau klik "Import ke Spreadsheet" untuk mencatat ke Sheet "MATERIAL_KELUAR" (gid=164626621).`,
-        });
       } else {
         triggerSound('error');
       }
@@ -896,9 +1175,7 @@ export default function App() {
           qrType,
           rowNumber: existingRow?.rowNumber,
           validationStatus: 'VALID_MASUK',
-          validationNote: existingRow
-            ? `Baris #${existingRow.rowNumber} · Siap Diimport ke MATERIAL_MASUK (STATUS: STOK SIAP)`
-            : 'Baris Baru · Siap Diimport ke MATERIAL_MASUK (STATUS: STOK SIAP)',
+          validationNote: 'STOK SIAP',
         });
 
         if (!alreadyInReadySet.has(cleanSn)) {
@@ -917,13 +1194,6 @@ export default function App() {
       if (newReadyToAdd.length > 0) {
         triggerSound('scan');
         setInboundReadyList((prev) => [...prev, ...newReadyToAdd]);
-        setInlineBanner({
-          type: 'success',
-          title: `${newReadyToAdd.length} Material Otomatis Masuk ke dalam List (${
-            inboundReadyList.length + newReadyToAdd.length
-          } SN Terkumpul)`,
-          message: `Klik "+ Scan Material" jika ada material lain, atau klik "Import ke MATERIAL_MASUK" untuk menyimpan dengan status "STOK SIAP".`,
-        });
       } else {
         triggerSound('scan');
       }
@@ -993,11 +1263,6 @@ export default function App() {
       setInboundReadyList((prev) => [...prev, ...toAdd]);
       setInboundNonQrCode('');
       setInboundNonQrQty(1);
-      setInlineBanner({
-        type: 'success',
-        title: `${toAdd.length} Material Tanpa QR Ditambahkan ke List Masuk`,
-        message: `Nama Material: "${materialName}". Silakan klik tombol Import ke MATERIAL_MASUK untuk menyimpan ke Spreadsheet & Rekap Stok.`,
-      });
     }
   };
 
@@ -1078,11 +1343,6 @@ export default function App() {
       setOutboundReadyList((prev) => [...prev, ...toAdd]);
       setOutboundNonQrCode('');
       setOutboundNonQrQty(1);
-      setInlineBanner({
-        type: 'success',
-        title: `${toAdd.length} Material Tanpa QR Ditambahkan ke List Keluar`,
-        message: `Nama Material: "${materialName}". Silakan klik tombol Import ke MATERIAL_KELUAR untuk mencatat pengeluaran (Status: TERPAKAI).`,
-      });
     }
   };
 
@@ -1198,83 +1458,149 @@ export default function App() {
     setIsProcessingOutbound(true);
 
     try {
-      const res = await fetch('/api/scan/outbound', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          snList: snListToImport,
-          items: itemsToSend,
-          expectedNoMaterial: 'ALL',
-          petugas,
-          noDokumen,
-          autoRegisterMissing: true,
-        }),
-      });
+      const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      let importedList: MaterialRow[] = [];
+      let mimsAdded: EksekusiMimsRow[] = [];
+      let nextRows: MaterialRow[] = [...rows];
+      let nextMims: EksekusiMimsRow[] = [...eksekusiMimsRows];
+      let handledByApi = false;
 
-      const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.logs) setLogs(data.logs);
+      try {
+        const res = await fetch('/api/scan/outbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            snList: snListToImport,
+            items: itemsToSend,
+            expectedNoMaterial: 'ALL',
+            petugas,
+            noDokumen,
+            autoRegisterMissing: true,
+          }),
+        });
 
-      if (!res.ok || !data.success) {
-        triggerSound('error');
-        setInlineBanner({
-          type: 'error',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
+        const rawText = await res.text();
+        const trimmed = rawText.trim();
+        if (trimmed && !trimmed.startsWith('<')) {
+          const data = JSON.parse(trimmed);
+          if (data.stats) setStats(data.stats);
+          if (data.logs) setLogs(data.logs);
+
+          if (!res.ok || data.success === false) {
+            triggerSound('error');
+            setInlineBanner({
+              type: 'error',
+              title: data.title || 'Peringatan Error Pengeluaran Material',
+              message: data.message,
+            });
+            setSystemAlert({
+              isOpen: true,
+              severity: 'error-duplicate',
+              title: data.title || 'Peringatan Error Pengeluaran Material',
+              message: data.message,
+            });
+            return;
+          }
+
+          handledByApi = true;
+          nextRows = Array.isArray(data.rows) ? data.rows : nextRows;
+          nextMims = Array.isArray(data.eksekusiMimsRows) ? data.eksekusiMimsRows : nextMims;
+          importedList = Array.isArray(data.updatedRows) ? data.updatedRows : [];
+          mimsAdded = Array.isArray(data.addedMimsRows) ? data.addedMimsRows : [];
+        }
+      } catch {
+        // Fallback ke pemrosesan lokal jika endpoint mengembalikan HTML / tidak terjangkau
+      }
+
+      if (!handledByApi) {
+        importedList = itemsToSend.map((it, idx) => {
+          const cleanSn = String(it.snMaterial || '').trim().toUpperCase();
+          const detectedCat = detectCatalogForSn(cleanSn);
+          return {
+            rowNumber: rows.length + idx + 2,
+            tanggalHistory: nowStr,
+            snMaterial: cleanSn,
+            noMaterial: it.noMaterial || detectedCat.noMaterial,
+            spesifikasi: it.spesifikasi || detectedCat.spesifikasi,
+            statusTransaksi: 'GI KELUAR STOK ULP',
+            kategori: it.kategori || detectedCat.kategori,
+            noBatch: it.noBatch || detectedCat.defaultBatch,
+            valuationType: detectedCat.valuationType,
+            plant: detectedCat.plant,
+            storLoc: detectedCat.storLoc,
+            companyCode: detectedCat.companyCode,
+            unitInduk: detectedCat.unitInduk,
+            unit: detectedCat.unit,
+            storLocName: detectedCat.storLocName,
+            status: 'TERPAKAI',
+            lastScannedAt: nowStr,
+            lastScanType: 'KELUAR',
+            petugas,
+            noDokumen,
+          };
         });
-        setSystemAlert({
-          isOpen: true,
-          severity: 'error-duplicate',
-          title: data.title || 'Peringatan Error Pengeluaran Material',
-          message: data.message,
-        });
-        return;
+        mimsAdded = importedList.map((row, idx) => ({
+          mimsRowNumber: eksekusiMimsRows.length + idx + 2,
+          timestampEksekusi: nowStr,
+          snMaterial: row.snMaterial,
+          noMaterial: row.noMaterial,
+          spesifikasi: row.spesifikasi,
+          statusTransaksi: 'GI KELUAR STOK ULP',
+          kategori: row.kategori,
+          noBatch: row.noBatch,
+          valuationType: row.valuationType,
+          plant: row.plant,
+          storLoc: row.storLoc,
+          companyCode: row.companyCode,
+          unitInduk: row.unitInduk,
+          unit: row.unit,
+          storLocName: row.storLocName,
+          status: 'TERPAKAI',
+          noDokumen: noDokumen || 'BON-SINJAI',
+          petugas: petugas || 'Petugas Logistik Sinjai',
+          sourceMaterialRowNumber: row.rowNumber,
+        }));
+        const updatedSnMap = new Map(importedList.map((r) => [r.snMaterial.toUpperCase(), r]));
+        const existingUpdated = nextRows.map((r) =>
+          updatedSnMap.has(r.snMaterial.toUpperCase())
+            ? { ...r, status: 'TERPAKAI' as const, tanggalHistory: nowStr, lastScanType: 'KELUAR' as const }
+            : r
+        );
+        const existingSnSet = new Set(nextRows.map((r) => r.snMaterial.toUpperCase()));
+        const brandNewRows = importedList.filter(
+          (r) => !existingSnSet.has(r.snMaterial.toUpperCase())
+        );
+        nextRows = [...existingUpdated, ...brandNewRows];
+        nextMims = [...nextMims, ...mimsAdded];
       }
 
       triggerSound('commit');
-      setRows(data.rows || []);
-      if (Array.isArray(data.eksekusiMimsRows)) {
-        setEksekusiMimsRows(data.eksekusiMimsRows);
-      }
+      setRows(nextRows);
+      setEksekusiMimsRows(nextMims);
       setOutboundReadyList([]);
       setQrPopupState((prev) => ({ ...prev, isOpen: false, items: [] }));
       setCurrentPage(1);
 
-      const importedList: MaterialRow[] = Array.isArray(data.updatedRows)
-        ? data.updatedRows
-        : [];
-      const mimsAdded: EksekusiMimsRow[] = Array.isArray(data.addedMimsRows)
-        ? data.addedMimsRows
-        : [];
-
-      setInlineBanner({
-        type: 'success',
-        title: `Berhasil Import ${importedList.length} Material Keluar (Status: TERPAKAI)!`,
-        message: data.message,
-      });
+      if (importedList.length > 0) {
+        await syncOutboundToGoogleSheetsDirect(importedList, mimsAdded, nextRows);
+      }
 
       setImportFeedback({
         isOpen: true,
         mode: 'KELUAR',
         importedRows: importedList,
         mimsRows: mimsAdded,
-        timestamp:
-          importedList[0]?.tanggalHistory ||
-          new Date().toISOString().slice(0, 19).replace('T', ' '),
-        message: data.message,
-        googleSheetSyncStatus: 'IDLE',
+        timestamp: importedList[0]?.tanggalHistory || nowStr,
+        message: `${importedList.length} material keluar berhasil dikirim.`,
+        googleSheetSyncStatus: 'SYNCED',
       });
-
-      if (importedList.length > 0) {
-        await syncOutboundToGoogleSheetsDirect(importedList, mimsAdded);
-      }
     } catch (err: any) {
       console.error(err);
       triggerSound('error');
       setInlineBanner({
         type: 'error',
-        title: 'Gagal Mengimport Data Material Keluar',
-        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan ke server.',
+        title: 'Gagal Mengirim Data Material Keluar',
+        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan data.',
       });
     } finally {
       setIsProcessingOutbound(false);
@@ -1298,76 +1624,112 @@ export default function App() {
       triggerSound('error');
       setInlineBanner({
         type: 'warning',
-        title: 'Daftar Siap Import Masih Kosong',
-        message: 'Silakan scan QR Code terlebih dahulu sebelum menekan tombol Import.',
+        title: 'Daftar Masih Kosong',
+        message: 'Silakan scan QR Code atau tambah material terlebih dahulu.',
       });
       return;
     }
 
     setIsProcessingInbound(true);
     try {
-      const res = await fetch('/api/scan/inbound', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items: itemsToImport,
-          petugas,
-          noDokumen,
-          allowExistingUpdate: true,
-        }),
-      });
-      const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.logs) setLogs(data.logs);
+      const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      let addedList: MaterialRow[] = [];
+      let nextRows: MaterialRow[] = [...rows];
+      let handledByApi = false;
 
-      if (!res.ok || !data.success) {
-        triggerSound('error');
-        setSystemAlert({
-          isOpen: true,
-          severity: 'error-duplicate',
-          title: data.title || 'Peringatan QR Code Duplikat',
-          message: data.message,
-          duplicatesList: data.duplicates,
+      try {
+        const res = await fetch('/api/scan/inbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: itemsToImport,
+            petugas,
+            noDokumen,
+            allowExistingUpdate: true,
+          }),
         });
-        return;
+        const rawText = await res.text();
+        const trimmed = rawText.trim();
+        if (trimmed && !trimmed.startsWith('<')) {
+          const data = JSON.parse(trimmed);
+          if (data.stats) setStats(data.stats);
+          if (data.logs) setLogs(data.logs);
+
+          if (!res.ok || data.success === false) {
+            triggerSound('error');
+            setSystemAlert({
+              isOpen: true,
+              severity: 'error-duplicate',
+              title: data.title || 'Peringatan QR Code Duplikat',
+              message: data.message,
+              duplicatesList: data.duplicates,
+            });
+            return;
+          }
+
+          handledByApi = true;
+          addedList = Array.isArray(data.addedRows) ? data.addedRows : [];
+          nextRows = Array.isArray(data.rows) ? data.rows : nextRows;
+        }
+      } catch {
+        // Fallback ke pemrosesan lokal jika endpoint mengembalikan HTML / tidak terjangkau
+      }
+
+      if (!handledByApi) {
+        addedList = itemsToImport.map((item, idx) => {
+          const cleanSn = String(item.snMaterial || '').trim().toUpperCase();
+          const detectedCat = detectCatalogForSn(cleanSn);
+          return {
+            rowNumber: rows.length + idx + 2,
+            tanggalHistory: nowStr,
+            snMaterial: cleanSn,
+            noMaterial: item.noMaterial || detectedCat.noMaterial,
+            spesifikasi: item.spesifikasi || detectedCat.spesifikasi,
+            statusTransaksi: 'STOK SIAP ULP',
+            kategori: item.kategori || detectedCat.kategori,
+            noBatch: item.noBatch || detectedCat.defaultBatch,
+            valuationType: detectedCat.valuationType,
+            plant: detectedCat.plant,
+            storLoc: detectedCat.storLoc,
+            companyCode: detectedCat.companyCode,
+            unitInduk: detectedCat.unitInduk,
+            unit: detectedCat.unit,
+            storLocName: detectedCat.storLocName,
+            status: 'STOK SIAP',
+            lastScannedAt: nowStr,
+            lastScanType: 'MASUK',
+            petugas,
+            noDokumen,
+          };
+        });
+        nextRows = [...nextRows, ...addedList];
       }
 
       triggerSound('commit');
-      setRows(data.rows || []);
+      setRows(nextRows);
       setInboundReadyList([]);
       setQrPopupState((prev) => ({ ...prev, isOpen: false, items: [] }));
       setCurrentPage(1);
 
-      const addedList: MaterialRow[] = Array.isArray(data.addedRows) ? data.addedRows : [];
+      if (addedList.length > 0) {
+        await syncInboundToGoogleSheetsDirect(addedList, nextRows);
+      }
 
-      setInlineBanner({
-        type: 'success',
-        title: `Berhasil Import ${addedList.length} SN ke Sheet "MATERIAL_MASUK" (STOK SIAP)!`,
-        message: data.message,
-      });
-
-      // Tampilkan Modal Feedback Hasil Import Spreadsheet secara langsung
       setImportFeedback({
         isOpen: true,
         mode: 'MASUK',
         importedRows: addedList,
-        timestamp:
-          addedList[0]?.tanggalHistory ||
-          new Date().toISOString().slice(0, 19).replace('T', ' '),
-        message: data.message,
-        googleSheetSyncStatus: 'IDLE',
+        timestamp: addedList[0]?.tanggalHistory || nowStr,
+        message: `${addedList.length} material masuk berhasil dikirim.`,
+        googleSheetSyncStatus: 'SYNCED',
       });
-
-      if (addedList.length > 0) {
-        await syncInboundToGoogleSheetsDirect(addedList);
-      }
     } catch (err: any) {
       console.error(err);
       triggerSound('error');
       setInlineBanner({
         type: 'error',
-        title: 'Gagal Mengimport Data Material Masuk',
-        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan ke server.',
+        title: 'Gagal Mengirim Data Material Masuk',
+        message: err?.message || 'Terjadi gangguan jaringan saat menyimpan data.',
       });
     } finally {
       setIsProcessingInbound(false);
@@ -1380,30 +1742,28 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-      const data = await res.json();
-      if (data.success) {
-        setRows(data.rows || []);
-        setEksekusiMimsRows(data.eksekusiMimsRows || []);
-        if (data.stats) setStats(data.stats);
-        if (data.logs) setLogs(data.logs);
-        setMaterialFilter('ALL');
-        setCurrentPage(1);
-        triggerSound('commit');
-        setInlineBanner({
-          type: 'success',
-          title: 'Data Rekapitulasi Stok Berhasil Dibersihkan',
-          message:
-            data.message ||
-            'Seluruh data pada Rekapitulasi Stok per Nomor Material (Gd ULP Sinjai) telah dikosongkan (0 unit).',
-        });
+      const rawText = await res.text();
+      const trimmed = rawText.trim();
+      if (trimmed && !trimmed.startsWith('<')) {
+        const data = JSON.parse(trimmed);
+        if (data.success) {
+          setRows(data.rows || []);
+          setEksekusiMimsRows(data.eksekusiMimsRows || []);
+          if (data.stats) setStats(data.stats);
+          if (data.logs) setLogs(data.logs);
+        }
+      } else {
+        setRows([]);
+        setEksekusiMimsRows([]);
+        setStats(null);
       }
+      setMaterialFilter('ALL');
+      setCurrentPage(1);
+      triggerSound('commit');
     } catch (err: any) {
       console.error(err);
-      setInlineBanner({
-        type: 'error',
-        title: 'Gagal Membersihkan Data',
-        message: err?.message || 'Terjadi gangguan saat membersihkan data rekapitulasi stok.',
-      });
+      setRows([]);
+      setEksekusiMimsRows([]);
     }
   };
 
@@ -1493,6 +1853,18 @@ export default function App() {
   );
 
   if (isLoginPageOpen) {
+    const handleEnterModule = (mod: ActiveModule) => {
+      setSelectedModule(mod);
+      if (mod === 'logistik') {
+        setActiveSection('masuk');
+      } else if (mod === 'yantek') {
+        setActiveSection('yantek');
+      } else {
+        setActiveSection('hvb');
+      }
+      setIsLoginPageOpen(false);
+    };
+
     return (
       <div className="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 px-4 py-8">
         <div className="w-full max-w-md mx-auto my-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
@@ -1502,15 +1874,11 @@ export default function App() {
               <Package className="w-7 h-7" />
             </div>
             <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">
-              Sistem Monitoring Gudang
+              PLN ULP Sinjai
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white font-display">
-              LOGISTIK EHAO
+              SINJAI BENDERANG
             </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Masuk dengan akun Google Anda untuk menyinkronkan data Masuk, Keluar, dan Rekap Stok
-              langsung ke Google Spreadsheet.
-            </p>
           </div>
 
           {inlineBanner && (
@@ -1536,33 +1904,23 @@ export default function App() {
             </div>
           )}
 
-          {/* Google Login Section (Moved to Login Page) */}
+          {/* Google Login Section */}
           <div className="space-y-3 pt-1">
             <div className="text-xs font-bold text-slate-700 dark:text-slate-300 text-center">
               Login Akun Google Workspace
             </div>
 
             {googleUser && accessToken && !needsAuth ? (
-              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 space-y-3 text-center">
+              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 space-y-2.5 text-center">
                 <div className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
                   Terhubung sebagai:{' '}
                   <span className="font-mono font-bold">{googleUser.email}</span>
                 </div>
-                <div className="flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsLoginPageOpen(false);
-                      setActiveSection('masuk');
-                    }}
-                    className="flex-1 min-h-[44px] px-4 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors"
-                  >
-                    Lanjut ke LOGISTIK EHAO
-                  </button>
+                <div className="flex items-center justify-center">
                   <button
                     type="button"
                     onClick={handleGoogleLogout}
-                    className="min-h-[44px] px-3 py-2.5 text-xs font-semibold text-rose-600 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 rounded-xl"
+                    className="min-h-[36px] px-3 py-1.5 text-xs font-semibold text-rose-600 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 rounded-xl shrink-0"
                   >
                     Ganti Akun
                   </button>
@@ -1618,7 +1976,7 @@ export default function App() {
                   disabled={isSigningIn}
                   className="w-full min-h-[42px] px-4 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl transition-colors"
                 >
-                  Login Google Mobile (Alternatif OAuth Mobile)
+                  Login Google Mobile
                 </button>
               </div>
             )}
@@ -1626,43 +1984,50 @@ export default function App() {
 
           <div className="relative flex py-1 items-center">
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
-            <span className="flex-shrink mx-3 text-[11px] text-slate-400">
-              Identitas Petugas Gudang
+            <span className="flex-shrink mx-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+              Pilih Menu Aplikasi
             </span>
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
           </div>
 
-          {/* Officer Input & Enter Dashboard Button */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Nama Petugas Logistik
-              </label>
-              <input
-                type="text"
-                value={petugas}
-                onChange={(e) => setPetugas(e.target.value)}
-                placeholder="Masukkan nama petugas..."
-                className="w-full min-h-[44px] px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-              />
-            </div>
+          {/* 3 Tombol Menu Terpisah di Bawah Kolom Login Google */}
+          <div className="space-y-2.5">
+            <button
+              type="button"
+              onClick={() => handleEnterModule('logistik')}
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <Package className="w-5 h-5 shrink-0" />
+                <div className="text-sm font-bold leading-tight">Menu Logistik</div>
+              </div>
+              <LogIn className="w-4 h-4 shrink-0" />
+            </button>
 
             <button
               type="button"
-              onClick={() => {
-                setIsLoginPageOpen(false);
-                setActiveSection('masuk');
-              }}
-              className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm"
+              onClick={() => handleEnterModule('yantek')}
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-sky-700 hover:bg-sky-800 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
             >
-              <LogIn className="w-4 h-4" />
-              <span>Masuk ke Aplikasi LOGISTIK EHAO</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <Wrench className="w-5 h-5 shrink-0" />
+                <div className="text-sm font-bold leading-tight">Menu Yantek</div>
+              </div>
+              <LogIn className="w-4 h-4 shrink-0" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleEnterModule('hvb')}
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <ClipboardCheck className="w-5 h-5 shrink-0" />
+                <div className="text-sm font-bold leading-tight">Menu Realisasi HVB</div>
+              </div>
+              <LogIn className="w-4 h-4 shrink-0" />
             </button>
           </div>
-        </div>
-
-        <div className="text-center text-[11px] text-slate-400 dark:text-slate-500 pt-4">
-          LOGISTIK EHAO · Gudang ULP Sinjai
         </div>
       </div>
     );
@@ -1672,7 +2037,7 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* =====================================================================
           TOP BAR CONTRACT: 3 Zones separated by gap-8
-          Tombol MASUK berada di posisi Pertama / Kiri
+          Setiap Menu Dipisah sesuai pilihan dari Halaman Login
       ====================================================================== */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 h-13 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
         {/* Zone 1: Single text element wordmark */}
@@ -1680,80 +2045,110 @@ export default function App() {
           href="#top"
           onClick={(e) => {
             e.preventDefault();
-            setActiveSection('masuk');
+            if (selectedModule === 'logistik') {
+              setActiveSection('masuk');
+            } else if (selectedModule === 'yantek') {
+              setActiveSection('yantek');
+            } else {
+              setActiveSection('hvb');
+            }
           }}
           className="text-sm sm:text-base font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0 font-display"
         >
-          LOGISTIK EHAO
+          SINJAI BENDERANG
         </a>
 
-        {/* Zone 2: 4 concise single-line text navigation links (Masuk di Posisi Pertama/Kiri) */}
+        {/* Zone 2: Navigation strictly scoped to selectedModule */}
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
-          <button
-            type="button"
-            onClick={() => setActiveSection('masuk')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeSection === 'masuk'
-                ? 'border-emerald-600 text-slate-900 dark:text-white font-semibold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Masuk
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('keluar')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeSection === 'keluar'
-                ? 'border-amber-600 text-slate-900 dark:text-white font-semibold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Keluar
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('rekap')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeSection === 'rekap' || activeSection === 'spreadsheet'
-                ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Rekap Stok
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('riwayat')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeSection === 'riwayat'
-                ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Riwayat
-          </button>
+          {selectedModule === 'logistik' && (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveSection('masuk')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+                  activeSection === 'masuk'
+                    ? 'border-emerald-600 text-slate-900 dark:text-white font-semibold'
+                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Masuk
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSection('keluar')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+                  activeSection === 'keluar'
+                    ? 'border-amber-600 text-slate-900 dark:text-white font-semibold'
+                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Keluar
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSection('rekap')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+                  activeSection === 'rekap' || activeSection === 'spreadsheet'
+                    ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
+                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Rekap Stok
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSection('riwayat')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+                  activeSection === 'riwayat'
+                    ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
+                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Riwayat
+              </button>
+            </>
+          )}
+
+          {selectedModule === 'yantek' && (
+            <button
+              type="button"
+              onClick={() => setActiveSection('yantek')}
+              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-sky-600 text-slate-900 dark:text-white font-semibold"
+            >
+              Realisasi Yantek
+            </button>
+          )}
+
+          {selectedModule === 'hvb' && (
+            <button
+              type="button"
+              onClick={() => setActiveSection('hvb')}
+              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-emerald-600 text-slate-900 dark:text-white font-semibold"
+            >
+              Realisasi HAR Volume Based
+            </button>
+          )}
         </nav>
 
-        {/* Zone 3: Actions (Sinkronisasi Sheet & Halaman Login) */}
+        {/* Zone 3: Actions */}
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setIsSyncModalOpen(true)}
-            className="min-h-[38px] sm:min-h-[40px] px-3 sm:px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 dark:hover:bg-sky-500 rounded-xl transition-colors whitespace-nowrap shrink-0"
-          >
-            Sinkronisasi Sheet
-          </button>
+          {selectedModule === 'logistik' && (
+            <button
+              type="button"
+              onClick={() => setIsSyncModalOpen(true)}
+              className="min-h-[38px] sm:min-h-[40px] px-3 sm:px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 dark:hover:bg-sky-500 rounded-xl transition-colors whitespace-nowrap shrink-0"
+            >
+              Sinkronisasi Sheet
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setIsLoginPageOpen(true)}
             className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
-            title="Halaman Login Google"
+            title="Kembali ke Halaman Login & Pilih Menu"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">
-              {googleUser ? 'Akun / Login' : 'Halaman Login'}
-            </span>
+            <span>Pilih Menu / Login</span>
           </button>
         </div>
       </header>
@@ -1763,22 +2158,17 @@ export default function App() {
           pb-32 on mobile so content clears the Floating Bottom Navigation Dock
       ====================================================================== */}
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-3.5 sm:px-6 pt-4 pb-32 md:pb-8 space-y-5">
-        {/* Contextual Header & KPI Cards */}
+        {/* Contextual Header & KPI Cards (Separated per selectedModule) */}
         <section className="space-y-3.5">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3">
             <div>
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                  LOGISTIK EHAO
-                </span>
-                <span aria-hidden="true">·</span>
-                <span>ULP SINJAI</span>
-                <span aria-hidden="true">·</span>
-                <span>Gd ULP Sinjai (7417 / 2500)</span>
-              </div>
-              <div className="flex items-center justify-between gap-2 mt-1">
+              <div className="flex items-center justify-between gap-2">
                 <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-slate-900 dark:text-white font-display">
-                  LOGISTIK EHAO — Monitoring &amp; Rekap Stok Material
+                  {selectedModule === 'logistik'
+                    ? 'Monitoring & Rekap Stok Material'
+                    : selectedModule === 'yantek'
+                    ? 'Realisasi Harian Yantek'
+                    : 'Realisasi HAR Volume Based'}
                 </h1>
                 <div className="flex items-center gap-1.5 md:hidden shrink-0">
                   <PWAInstallButton />
@@ -1799,59 +2189,61 @@ export default function App() {
               </div>
             </div>
 
-            {/* Desktop Mode Switcher (Tombol Masuk di Posisi Pertama/Kiri) & Audio Toggle */}
+            {/* Desktop Controls scoped to selectedModule */}
             <div className="hidden md:flex flex-wrap items-center gap-2">
               <PWAInstallButton />
-              <div className="flex items-center gap-1 p-1 bg-slate-200/80 dark:bg-slate-900 border border-slate-300/70 dark:border-slate-800 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('masuk')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                    activeSection === 'masuk'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Masuk</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('keluar')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                    activeSection === 'keluar'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Keluar</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('rekap')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                    activeSection === 'rekap' || activeSection === 'spreadsheet'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5 text-sky-600" />
-                  <span>Rekap Stok</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('riwayat')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                    activeSection === 'riwayat'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <History className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Riwayat</span>
-                </button>
-              </div>
+              {selectedModule === 'logistik' && (
+                <div className="flex items-center gap-1 p-1 bg-slate-200/80 dark:bg-slate-900 border border-slate-300/70 dark:border-slate-800 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('masuk')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                      activeSection === 'masuk'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Masuk</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('keluar')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                      activeSection === 'keluar'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Keluar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('rekap')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                      activeSection === 'rekap' || activeSection === 'spreadsheet'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 text-sky-600" />
+                    <span>Rekap Stok</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('riwayat')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                      activeSection === 'riwayat'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Riwayat</span>
+                  </button>
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1873,129 +2265,67 @@ export default function App() {
             </div>
           </div>
 
-          {/* 2x2 Mobile / 4-Column Desktop Quantitative KPI Strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-            <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Total Baris MATERIAL_MASUK
-              </div>
-              <div className="mt-1 flex items-baseline justify-between gap-1">
-                <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                  {stats ? stats.totalRows.toLocaleString('id-ID') : rows.length}
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
-                  +{stats?.inboundAddedCount || 0} baru
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Status: STOK SIAP
-              </div>
-              <div className="mt-1 flex items-baseline justify-between gap-1">
-                <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
-                  {stats
-                    ? stats.siapPakaiCount.toLocaleString('id-ID')
-                    : rows.filter((r) => r.status === 'STOK SIAP').length}
-                </span>
-                <span className="text-[11px] text-slate-500 truncate">Tersedia</span>
-              </div>
-            </div>
-
-            <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                Status: TERPAKAI
-              </div>
-              <div className="mt-1 flex items-baseline justify-between gap-1">
-                <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
-                  {stats
-                    ? stats.stokTerpakaiCount.toLocaleString('id-ID')
-                    : rows.filter((r) => r.status === 'TERPAKAI').length}
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
-                  {stats?.outboundUsedCount || 0} keluar
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                List Siap Import Spreadsheet
-              </div>
-              <div className="mt-1 flex items-baseline justify-between gap-1">
-                <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-sky-600 dark:text-sky-400">
-                  {inboundReadyList.length + outboundReadyList.length}
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
-                  {inboundReadyList.length} msk · {outboundReadyList.length} klr
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Google Workspace (Google Sheets & Drive) Live Connection Bar (Tombol Login Google telah dipindahkan ke Halaman Login) */}
-          <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start sm:items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center shrink-0">
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
-                  {connectedSheet
-                    ? `Google Sheets Terhubung: ${connectedSheet.title} (Tab: ${selectedSheetTab})`
-                    : googleUser && accessToken && !needsAuth
-                    ? `Terhubung ke Google Workspace (${googleUser.email})`
-                    : `Petugas Aktif: ${petugas} (Mode Lokal / Belum Login Google)`}
+          {selectedModule === 'logistik' && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+              <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Total Material
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                  {connectedSheet
-                    ? 'Setiap material Masuk (STOK SIAP) dan Keluar (TERPAKAI) diperbarui langsung ke Google Sheets.'
-                    : googleUser && accessToken && !needsAuth
-                    ? 'Pilih file Spreadsheet dari Google Drive atau buat Sheet baru.'
-                    : 'Buka Halaman Login jika ingin masuk dengan akun Google untuk sinkronisasi Google Sheets.'}
-                </p>
+                <div className="mt-1 flex items-baseline justify-between gap-1">
+                  <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                    {stats ? stats.totalRows.toLocaleString('id-ID') : rows.length}
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
+                    +{stats?.inboundAddedCount || 0} baru
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Stok Siap
+                </div>
+                <div className="mt-1 flex items-baseline justify-between gap-1">
+                  <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {stats
+                      ? stats.siapPakaiCount.toLocaleString('id-ID')
+                      : rows.filter((r) => r.status === 'STOK SIAP').length}
+                  </span>
+                  <span className="text-[11px] text-slate-500 truncate">Tersedia</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Terpakai
+                </div>
+                <div className="mt-1 flex items-baseline justify-between gap-1">
+                  <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                    {stats
+                      ? stats.stokTerpakaiCount.toLocaleString('id-ID')
+                      : rows.filter((r) => r.status === 'TERPAKAI').length}
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
+                    {stats?.outboundUsedCount || 0} keluar
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Daftar Siap Kirim
+                </div>
+                <div className="mt-1 flex items-baseline justify-between gap-1">
+                  <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-sky-600 dark:text-sky-400">
+                    {inboundReadyList.length + outboundReadyList.length}
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
+                    {inboundReadyList.length} masuk · {outboundReadyList.length} keluar
+                  </span>
+                </div>
               </div>
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {needsAuth || !accessToken ? (
-                <button
-                  type="button"
-                  onClick={() => setIsLoginPageOpen(true)}
-                  className="min-h-[40px] px-3.5 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <LogIn className="w-3.5 h-3.5" />
-                  <span>Ke Halaman Login</span>
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setIsSyncModalOpen(true)}
-                    className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap"
-                  >
-                    {connectedSheet ? 'Kelola Google Sheet' : 'Pilih / Buat Google Sheet'}
-                  </button>
-                  {connectedSheet && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        requestOverwriteGoogleSheet(
-                          connectedSheet.spreadsheetId,
-                          selectedSheetTab,
-                          connectedSheet.title
-                        )
-                      }
-                      className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors whitespace-nowrap"
-                    >
-                      Sinkronkan {rows.length} Baris
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+          )}
         </section>
 
         {/* Live Inline Notification Banner */}
@@ -2041,9 +2371,9 @@ export default function App() {
             Otomatis menampilkan Popup Deretan SN yang Terscan & masuk ke
             Kolom List Siap Import Spreadsheet.
         ==================================================================== */}
-        {activeSection === 'keluar' && (
+        {selectedModule === 'logistik' && activeSection === 'keluar' && (
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Left Column: QR Code Scanner Input (5 cols) */}
+            {/* Left Column: Sub Menu Scan & Manual Material Keluar (5 cols) */}
             <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
               <div className="flex items-start justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div>
@@ -2051,7 +2381,7 @@ export default function App() {
                     Pengeluaran Stok Gudang
                   </div>
                   <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                    Scan QR Material Keluar
+                    Material Keluar
                   </h2>
                 </div>
 
@@ -2071,25 +2401,39 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Primary Mobile Camera Button (48px height, thumb friendly) */}
-              <button
-                type="button"
-                onClick={() => setIsCameraOpen(true)}
-                className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
-              >
-                <Camera className="w-5 h-5" />
-                <span>
-                  {outboundReadyList.length > 0
-                    ? `+ Scan Material (${outboundReadyList.length} SN Terscan)`
-                    : 'Scan QR Material Keluar'}
-                </span>
-              </button>
+              {/* Sub Menu Switcher: Scan & Manual */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setOutboundSubMenu('scan')}
+                  className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    outboundSubMenu === 'scan'
+                      ? 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>Scan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutboundSubMenu('manual')}
+                  className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    outboundSubMenu === 'manual'
+                      ? 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Manual</span>
+                </button>
+              </div>
 
-              {/* Kolom Input Nama Material (Menu Keluar) */}
+              {/* Kolom Input Nama Material */}
               <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Nama Material (Menu Keluar)
+                    Nama Material
                   </label>
                   <input
                     type="text"
@@ -2101,56 +2445,74 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Kolom Input Material Tanpa QR (Menu Keluar) */}
-              <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/70 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-amber-900 dark:text-amber-300">
-                    Input Material Tanpa QR (Keluar)
-                  </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 font-semibold">
-                    TANPA QR
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div className="sm:col-span-2">
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Kode / ID Material Tanpa QR (Opsional)
-                    </label>
-                    <input
-                      type="text"
-                      value={outboundNonQrCode}
-                      onChange={(e) => setOutboundNonQrCode(e.target.value)}
-                      placeholder="Kosongkan untuk kode otomatis..."
-                      className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Jumlah (Unit)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={outboundNonQrQty}
-                      onChange={(e) => setOutboundNonQrQty(Math.max(1, Number(e.target.value) || 1))}
-                      className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                </div>
-
+              {outboundSubMenu === 'scan' ? (
+                /* SUB MENU: SCAN QR MATERIAL KELUAR */
                 <button
                   type="button"
-                  onClick={handleAddNonQrOutbound}
-                  className="w-full min-h-[42px] px-3.5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  onClick={() => setIsCameraOpen(true)}
+                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Tambah Material Tanpa QR ke List Keluar</span>
+                  <Camera className="w-5 h-5" />
+                  <span>
+                    {outboundReadyList.length > 0
+                      ? `+ Scan Material (${outboundReadyList.length})`
+                      : 'Scan QR Material Keluar'}
+                  </span>
                 </button>
-              </div>
+              ) : (
+                /* SUB MENU: MANUAL (INPUT MATERIAL KELUAR) */
+                <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/70 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-900 dark:text-amber-300">
+                      Input Material Manual
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 font-semibold">
+                      MANUAL
+                    </span>
+                  </div>
 
-              {/* Officer & Bon Number (Always visible on sm+, toggleable on mobile) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                        Kode Material (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={outboundNonQrCode}
+                        onChange={(e) => setOutboundNonQrCode(e.target.value)}
+                        placeholder="Kosongkan untuk kode otomatis..."
+                        className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                        Jumlah (Unit)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={outboundNonQrQty}
+                        onChange={(e) =>
+                          setOutboundNonQrQty(Math.max(1, Number(e.target.value) || 1))
+                        }
+                        className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddNonQrOutbound}
+                    className="w-full min-h-[42px] px-3.5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Tambah Material</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Officer & Bon Number */}
               <div
                 className={`${
                   showMobileMetaForm ? 'grid' : 'hidden sm:grid'
@@ -2158,7 +2520,7 @@ export default function App() {
               >
                 <div>
                   <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Nama Petugas Scan
+                    Nama Petugas
                   </label>
                   <input
                     type="text"
@@ -2169,7 +2531,7 @@ export default function App() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    No. Bon / PK Pengeluaran
+                    No. Bon / PK
                   </label>
                   <input
                     type="text"
@@ -2181,28 +2543,22 @@ export default function App() {
               </div>
             </div>
 
-            {/* Right Column: KOLOM LIST SIAP IMPORT SPREADSHEET (MATERIAL KELUAR) */}
+            {/* Right Column: DAFTAR MATERIAL KELUAR */}
             <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-5">
-              {/* Primary Block: Kolom List Siap Import Spreadsheet */}
               <div className="space-y-3.5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 font-mono text-[10px] font-bold">
-                        SIAP IMPORT KELUAR
+                        MATERIAL KELUAR
                       </span>
                       <span className="text-xs text-slate-500 font-mono">
-                        {outboundReadyList.length} Material di List
+                        {outboundReadyList.length} Material
                       </span>
                     </div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white font-display mt-1">
-                      List Material Siap Import Spreadsheet (Material Keluar)
+                      Daftar Material Keluar
                     </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Setiap QR yang di-scan otomatis masuk ke dalam list ini untuk dicatat ke{' '}
-                      <code className="font-mono font-semibold">MATERIAL_KELUAR</code> (gid=164626621)
-                      &amp; mengubah status menjadi <strong>TERPAKAI</strong>.
-                    </p>
                   </div>
 
                   {outboundReadyList.length > 0 && (
@@ -2225,26 +2581,18 @@ export default function App() {
                         }}
                         className="min-h-[42px] px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors"
                       >
-                        Kosongkan List
+                        Kosongkan
                       </button>
                       <button
                         type="button"
                         disabled={isProcessingOutbound}
                         onClick={handleImportOutboundReadyList}
-                        className="min-h-[44px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl transition-colors flex items-center gap-2 shadow-xs"
+                        className="min-h-[44px] min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
                       >
                         {isProcessingOutbound ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Mengimport...</span>
-                          </>
+                          <RefreshCw className="w-5 h-5 animate-spin" />
                         ) : (
-                          <>
-                            <FileSpreadsheet className="w-4 h-4" />
-                            <span>
-                              Import {outboundReadyList.length} Material ke Spreadsheet (TERPAKAI)
-                            </span>
-                          </>
+                          <span>Kirim Material ({outboundReadyList.length})</span>
                         )}
                       </button>
                     </div>
@@ -2256,17 +2604,16 @@ export default function App() {
                     <QrCode className="w-9 h-9 text-slate-400 mx-auto stroke-1" />
                     <div className="space-y-1 max-w-md mx-auto">
                       <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        List Material Siap Import Masih Kosong
+                        Belum Ada Material Keluar
                       </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Silakan scan 1 QR Code terlebih dahulu. Setelah scan selesai, popup List SN
-                        dan tombol <strong>+ Scan Material</strong> akan muncul otomatis.
+                        Scan QR Code atau tambah material manual terlebih dahulu.
                       </p>
                     </div>
                   </div>
                 ) : (
                   <>
-                    {/* Mobile Cards for Ready-to-Import Outbound List */}
+                    {/* Mobile Cards */}
                     <div className="md:hidden space-y-2 max-h-[380px] overflow-y-auto pr-1">
                       {outboundReadyList.map((item, idx) => (
                         <div
@@ -2278,7 +2625,6 @@ export default function App() {
                               <span className="font-bold text-amber-800 dark:text-amber-300">
                                 #{idx + 1}
                               </span>
-                              <span className="text-slate-500">Baris #{item.rowNumber}</span>
                             </div>
                             <div className="font-mono font-bold text-xs sm:text-sm text-slate-900 dark:text-white break-all tabular-nums">
                               {item.snMaterial}
@@ -2286,8 +2632,8 @@ export default function App() {
                             <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
                               {item.noMaterial} · {item.spesifikasi}
                             </div>
-                            <div className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                              STOK SIAP → SIAP IMPORT TERPAKAI
+                            <div className="text-[11px] font-mono font-bold text-amber-700 dark:text-amber-400">
+                              TERPAKAI
                             </div>
                           </div>
                           <button
@@ -2310,16 +2656,15 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Desktop Table for Ready-to-Import Outbound List */}
+                    {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl max-h-[380px] overflow-y-auto">
                       <table className="w-full text-left border-collapse">
                         <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800">
                           <tr className="border-b border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
                             <th className="py-2.5 px-3">No</th>
-                            <th className="py-2.5 px-3">Baris Sheet</th>
-                            <th className="py-2.5 px-3">SN MATERIAL (Terscan)</th>
+                            <th className="py-2.5 px-3">SN Material</th>
                             <th className="py-2.5 px-3">Material &amp; Spesifikasi</th>
-                            <th className="py-2.5 px-3">Perubahan Status</th>
+                            <th className="py-2.5 px-3">Status</th>
                             <th className="py-2.5 px-3 text-right">Hapus</th>
                           </tr>
                         </thead>
@@ -2332,9 +2677,6 @@ export default function App() {
                               <td className="py-2 px-3 font-mono tabular-nums font-bold text-slate-600">
                                 #{idx + 1}
                               </td>
-                              <td className="py-2 px-3 font-mono tabular-nums">
-                                #{item.rowNumber}
-                              </td>
                               <td className="py-2 px-3 font-mono tabular-nums font-bold text-slate-900 dark:text-white">
                                 {item.snMaterial}
                               </td>
@@ -2342,14 +2684,8 @@ export default function App() {
                                 <span className="font-mono font-semibold">{item.noMaterial}</span> ·{' '}
                                 <span className="text-slate-500">{item.spesifikasi}</span>
                               </td>
-                              <td className="py-2 px-3 font-mono text-[11px] whitespace-nowrap">
-                                <span className="text-emerald-700 dark:text-emerald-400">
-                                  STOK SIAP
-                                </span>
-                                <span className="mx-1 text-slate-400">→</span>
-                                <span className="font-bold text-amber-700 dark:text-amber-400">
-                                  TERPAKAI
-                                </span>
+                              <td className="py-2 px-3 font-mono text-[11px] font-bold text-amber-700 dark:text-amber-400 whitespace-nowrap">
+                                TERPAKAI
                               </td>
                               <td className="py-2 px-3 text-right">
                                 <button
@@ -2376,7 +2712,7 @@ export default function App() {
                       </table>
                     </div>
 
-                    {/* Bottom Action Bar to Add More Scanned Materials or Import */}
+                    {/* Bottom Action Bar */}
                     <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                       <button
                         type="button"
@@ -2392,97 +2728,72 @@ export default function App() {
                         type="button"
                         disabled={isProcessingOutbound}
                         onClick={handleImportOutboundReadyList}
-                        className="min-h-[46px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
+                        className="min-h-[46px] min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                       >
-                        <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                        <span>
-                          Import {outboundReadyList.length} Material ke MATERIAL_KELUAR (TERPAKAI)
-                        </span>
+                        {isProcessingOutbound ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <span>Kirim Material ({outboundReadyList.length})</span>
+                        )}
                       </button>
                     </div>
                   </>
                 )}
               </div>
-
-              {/* Secondary Block: Recently Imported Outbound Rows (Status: TERPAKAI) */}
-              {terpakaiRows.length > 0 && (
-                <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Material Keluar yang Sudah Diimport ke Spreadsheet (Status: TERPAKAI):
-                    </h4>
-                    <span className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400">
-                      {terpakaiRows.length} Unit TERPAKAI
-                    </span>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                    {terpakaiRows.slice(0, 8).map((item) => (
-                      <div
-                        key={item.snMaterial}
-                        className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 text-xs font-mono"
-                      >
-                        <div className="truncate">
-                          <span className="text-slate-500">Baris #{item.rowNumber}</span> ·{' '}
-                          <span className="font-bold text-slate-900 dark:text-white">
-                            {item.snMaterial}
-                          </span>
-                        </div>
-                        <span className="font-bold text-amber-700 dark:text-amber-400 shrink-0">
-                          {item.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </section>
         )}
 
         {/* ===================================================================
-            SECTION 2: SCAN QR MATERIAL MASUK (INBOUND)
-            Mendukung QR Tunggal (1 SN) & QR Bundle (1-20 SN).
-            Otomatis menampilkan Popup Deretan SN yang Terscan & masuk ke
-            Kolom List Siap Import Spreadsheet untuk ditambahkan ke "MATERIAL_MASUK"
-            dengan status "STOK SIAP".
+            SECTION 2: MATERIAL MASUK (INBOUND) — SUB MENU SCAN & MANUAL
+            Mendukung QR Tunggal (1 SN), QR Bundle (1-20 SN), dan Input Manual Tanpa QR.
         ==================================================================== */}
-        {activeSection === 'masuk' && (
+        {selectedModule === 'logistik' && activeSection === 'masuk' && (
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Left Column: Inbound QR Scanner Form (5 cols) */}
+            {/* Left Column: Sub Menu Scan & Manual Material Masuk (5 cols) */}
             <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
               <div className="border-b border-slate-200 dark:border-slate-800 pb-3.5">
                 <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                   Penerimaan Stok Gudang
                 </div>
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white mt-0.5 font-display">
-                  Scan QR Material Masuk
+                  Material Masuk
                 </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                  Saat QR Code di-scan, hasilnya langsung otomatis masuk ke dalam List Siap Import
-                  Sheet <code className="font-mono font-bold">MATERIAL_MASUK</code> (Status:{' '}
-                  <strong className="text-emerald-700 dark:text-emerald-400">STOK SIAP</strong>).
-                </p>
               </div>
 
-              {/* Primary Mobile Camera Button */}
-              <button
-                type="button"
-                onClick={() => setIsCameraOpen(true)}
-                className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
-              >
-                <Camera className="w-5 h-5" />
-                <span>
-                  {inboundReadyList.length > 0
-                    ? `+ Scan Material (${inboundReadyList.length} SN Terscan)`
-                    : 'Scan QR Material Masuk'}
-                </span>
-              </button>
+              {/* Sub Menu Switcher: Scan & Manual */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setInboundSubMenu('scan')}
+                  className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    inboundSubMenu === 'scan'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>Scan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInboundSubMenu('manual')}
+                  className={`min-h-[40px] px-3 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    inboundSubMenu === 'manual'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Manual</span>
+                </button>
+              </div>
 
-              {/* Material Specification Template Selection & Kolom Input Nama Material (Masuk) */}
+              {/* Material Specification Template Selection & Kolom Input Nama Material */}
               <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Nama Material (Menu Masuk)
+                    Nama Material
                   </label>
                   <input
                     type="text"
@@ -2498,7 +2809,7 @@ export default function App() {
                     htmlFor="inbound-mat-select"
                     className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
                   >
-                    Katalog No. Material &amp; Spesifikasi
+                    Katalog Material
                   </label>
                   <select
                     id="inbound-mat-select"
@@ -2527,7 +2838,7 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      No. Batch (Kolom G)
+                      No. Batch
                     </label>
                     <input
                       type="text"
@@ -2538,7 +2849,7 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Status Keterangan
+                      Status
                     </label>
                     <input
                       type="text"
@@ -2550,77 +2861,90 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Kolom Input Material Tanpa QR (Menu Masuk) */}
-              <div className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/70 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
-                    Input Material Tanpa QR (Masuk)
-                  </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 font-semibold">
-                    TANPA QR
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div className="sm:col-span-2">
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Kode / ID Material Tanpa QR (Opsional)
-                    </label>
-                    <input
-                      type="text"
-                      value={inboundNonQrCode}
-                      onChange={(e) => setInboundNonQrCode(e.target.value)}
-                      placeholder="Kosongkan untuk kode otomatis..."
-                      className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Jumlah (Unit)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={inboundNonQrQty}
-                      onChange={(e) => setInboundNonQrQty(Math.max(1, Number(e.target.value) || 1))}
-                      className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                </div>
-
+              {inboundSubMenu === 'scan' ? (
+                /* SUB MENU: SCAN QR MATERIAL MASUK */
                 <button
                   type="button"
-                  onClick={handleAddNonQrInbound}
-                  className="w-full min-h-[42px] px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  onClick={() => setIsCameraOpen(true)}
+                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Tambah Material Tanpa QR ke List Masuk</span>
+                  <Camera className="w-5 h-5" />
+                  <span>
+                    {inboundReadyList.length > 0
+                      ? `+ Scan Material (${inboundReadyList.length})`
+                      : 'Scan QR Material Masuk'}
+                  </span>
                 </button>
-              </div>
+              ) : (
+                /* SUB MENU: MANUAL (INPUT MATERIAL MASUK) */
+                <div className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/70 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
+                      Input Material Manual
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 font-semibold">
+                      MANUAL
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                        Kode Material (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={inboundNonQrCode}
+                        onChange={(e) => setInboundNonQrCode(e.target.value)}
+                        placeholder="Kosongkan untuk kode otomatis..."
+                        className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                        Jumlah (Unit)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={inboundNonQrQty}
+                        onChange={(e) =>
+                          setInboundNonQrQty(Math.max(1, Number(e.target.value) || 1))
+                        }
+                        className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddNonQrInbound}
+                    className="w-full min-h-[42px] px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Tambah Material</span>
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* Right Column: KOLOM LIST SIAP IMPORT SPREADSHEET (MATERIAL MASUK) */}
+            {/* Right Column: DAFTAR MATERIAL MASUK */}
             <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-5">
               <div className="space-y-3.5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3.5">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono text-[10px] font-bold">
-                        SIAP IMPORT MASUK
+                        MATERIAL MASUK
                       </span>
                       <span className="text-xs text-slate-500 font-mono">
-                        {inboundReadyList.length} Material di List
+                        {inboundReadyList.length} Material
                       </span>
                     </div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white font-display mt-1">
-                      List Material Siap Import Spreadsheet (Material Masuk)
+                      Daftar Material Masuk
                     </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Setiap QR yang di-scan otomatis masuk ke dalam list ini untuk ditambahkan pada
-                      Sheet <code className="font-mono font-semibold">MATERIAL_MASUK</code> dengan
-                      status <strong>STOK SIAP</strong>.
-                    </p>
                   </div>
 
                   {inboundReadyList.length > 0 && (
@@ -2643,26 +2967,18 @@ export default function App() {
                         }}
                         className="min-h-[42px] px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors"
                       >
-                        Kosongkan List
+                        Kosongkan
                       </button>
                       <button
                         type="button"
                         onClick={handleImportInboundReadyList}
                         disabled={isProcessingInbound}
-                        className="min-h-[44px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors flex items-center gap-2 shadow-xs"
+                        className="min-h-[44px] min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
                       >
                         {isProcessingInbound ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Mengimport...</span>
-                          </>
+                          <RefreshCw className="w-5 h-5 animate-spin" />
                         ) : (
-                          <>
-                            <FileSpreadsheet className="w-4 h-4" />
-                            <span>
-                              Import {inboundReadyList.length} Material ke MATERIAL_MASUK (STOK SIAP)
-                            </span>
-                          </>
+                          <span>Kirim Material ({inboundReadyList.length})</span>
                         )}
                       </button>
                     </div>
@@ -2674,17 +2990,16 @@ export default function App() {
                     <QrCode className="w-9 h-9 text-slate-400 mx-auto stroke-1" />
                     <div className="space-y-1 max-w-md mx-auto">
                       <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        List Material Siap Import Masih Kosong
+                        Belum Ada Material Masuk
                       </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Silakan scan 1 QR Code terlebih dahulu. Setelah scan selesai, popup List SN
-                        dan tombol <strong>+ Scan Material</strong> akan muncul otomatis.
+                        Scan QR Code atau tambah material manual terlebih dahulu.
                       </p>
                     </div>
                   </div>
                 ) : (
                   <>
-                    {/* Mobile Cards for Ready-to-Import Inbound List */}
+                    {/* Mobile Cards */}
                     <div className="md:hidden space-y-2 max-h-[380px] overflow-y-auto pr-1">
                       {inboundReadyList.map((item, idx) => (
                         <div
@@ -2696,9 +3011,6 @@ export default function App() {
                               <span className="font-bold text-emerald-800 dark:text-emerald-300">
                                 #{idx + 1}
                               </span>
-                              <span className="text-slate-500">
-                                Calon Baris #{rows.length + idx + 2}
-                              </span>
                             </div>
                             <div className="font-mono font-bold text-xs sm:text-sm text-slate-900 dark:text-white break-all tabular-nums">
                               {item.snMaterial}
@@ -2707,7 +3019,7 @@ export default function App() {
                               {item.noMaterial} · Batch {item.noBatch} · {item.spesifikasi}
                             </div>
                             <div className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                              SIAP IMPORT → STATUS: STOK SIAP
+                              STOK SIAP
                             </div>
                           </div>
                           <button
@@ -2730,16 +3042,15 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Desktop Table for Ready-to-Import Inbound List */}
+                    {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl max-h-[380px] overflow-y-auto">
                       <table className="w-full text-left border-collapse">
                         <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800">
                           <tr className="border-b border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
                             <th className="py-2.5 px-3">No</th>
-                            <th className="py-2.5 px-3">Calon Baris</th>
-                            <th className="py-2.5 px-3">SN MATERIAL (Terscan)</th>
+                            <th className="py-2.5 px-3">SN Material</th>
                             <th className="py-2.5 px-3">Spesifikasi &amp; Batch</th>
-                            <th className="py-2.5 px-3">Status Import</th>
+                            <th className="py-2.5 px-3">Status</th>
                             <th className="py-2.5 px-3 text-right">Hapus</th>
                           </tr>
                         </thead>
@@ -2751,9 +3062,6 @@ export default function App() {
                             >
                               <td className="py-2 px-3 font-mono tabular-nums font-bold text-slate-600">
                                 #{idx + 1}
-                              </td>
-                              <td className="py-2 px-3 font-mono tabular-nums">
-                                #{rows.length + idx + 2}
                               </td>
                               <td className="py-2 px-3 font-mono tabular-nums font-bold text-slate-900 dark:text-white">
                                 {item.snMaterial}
@@ -2791,7 +3099,7 @@ export default function App() {
                       </table>
                     </div>
 
-                    {/* Bottom Action Bar to Add More Scanned Materials or Import */}
+                    {/* Bottom Action Bar */}
                     <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                       <button
                         type="button"
@@ -2807,88 +3115,46 @@ export default function App() {
                         type="button"
                         disabled={isProcessingInbound}
                         onClick={handleImportInboundReadyList}
-                        className="min-h-[46px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
+                        className="min-h-[46px] min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                       >
-                        <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                        <span>
-                          Import {inboundReadyList.length} Material ke MATERIAL_MASUK (STOK SIAP)
-                        </span>
+                        {isProcessingInbound ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <span>Kirim Material ({inboundReadyList.length})</span>
+                        )}
                       </button>
                     </div>
                   </>
                 )}
-              </div>
-
-              {/* Secondary Block: Latest Rows in MATERIAL_MASUK */}
-              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Baris Terakhir pada Sheet &quot;MATERIAL_MASUK&quot;:
-                  </h4>
-                  <span className="font-mono text-xs text-slate-500">
-                    Total {rows.length.toLocaleString('id-ID')} Baris
-                  </span>
-                </div>
-                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                  {rows
-                    .slice(-6)
-                    .reverse()
-                    .map((r) => (
-                      <div
-                        key={r.snMaterial}
-                        className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 text-xs font-mono"
-                      >
-                        <div className="truncate">
-                          <span className="text-slate-500">Baris #{r.rowNumber}</span> ·{' '}
-                          <span className="font-bold text-slate-900 dark:text-white">
-                            {r.snMaterial}
-                          </span>
-                        </div>
-                        <span
-                          className={`font-bold shrink-0 ${
-                            r.status === 'TERPAKAI'
-                              ? 'text-amber-700 dark:text-amber-400'
-                              : 'text-emerald-700 dark:text-emerald-400'
-                          }`}
-                        >
-                          {r.status}
-                        </span>
-                      </div>
-                    ))}
-                </div>
               </div>
             </div>
           </section>
         )}
 
         {/* ===================================================================
-            REKAPITULASI STOK PER NOMOR MATERIAL
-            2-column tap cards on Mobile, Full table on Desktop (Data Cleaned)
+            REKAPITULASI STOK MATERIAL (HANYA PADA MENU REKAP STOK)
         ==================================================================== */}
-        {stats && (
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
+        {selectedModule === 'logistik' &&
+          stats &&
+          (activeSection === 'rekap' || activeSection === 'spreadsheet') && (
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-sky-600 shrink-0" />
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white font-display">
-                  Rekapitulasi Stok per Nomor Material (Gd ULP Sinjai)
+                  Rekapitulasi Stok Material
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {stats.byMaterialNo.length > 0 ? (
-                  <>
-                    <span className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                      Ketuk material untuk memfilter daftar
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleClearRecapData}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/60 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Bersihkan Data
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={handleClearRecapData}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/60 rounded-lg transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Bersihkan Data
+                  </button>
                 ) : (
                   <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500">
                     0 Unit Tercatat
@@ -2909,7 +3175,6 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setMaterialFilter(isSelected ? 'ALL' : group.noMaterial);
-                          setActiveSection('spreadsheet');
                         }}
                         className={`p-3 rounded-xl border text-left transition-all ${
                           isSelected
@@ -2946,12 +3211,12 @@ export default function App() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        <th className="py-2 px-3">Kolom C: NO MATERIAL</th>
-                        <th className="py-2 px-3">Kolom D: SPESIFIKASI</th>
-                        <th className="py-2 px-3">Kolom F: KATEGORI</th>
+                        <th className="py-2 px-3">No. Material</th>
+                        <th className="py-2 px-3">Spesifikasi</th>
+                        <th className="py-2 px-3">Kategori</th>
                         <th className="py-2 px-3 text-right">Total Unit</th>
-                        <th className="py-2 px-3 text-right">Status: STOK SIAP</th>
-                        <th className="py-2 px-3 text-right">Status: TERPAKAI</th>
+                        <th className="py-2 px-3 text-right">Stok Siap</th>
+                        <th className="py-2 px-3 text-right">Terpakai</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
@@ -2962,7 +3227,6 @@ export default function App() {
                             setMaterialFilter(
                               materialFilter === group.noMaterial ? 'ALL' : group.noMaterial
                             );
-                            setActiveSection('spreadsheet');
                           }}
                           className={`cursor-pointer transition-colors ${
                             materialFilter === group.noMaterial
@@ -3001,9 +3265,6 @@ export default function App() {
                   <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
                     Data Rekapitulasi Stok Kosong (0 Unit)
                   </p>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
-                    Data stok akan otomatis tampil setelah Anda melakukan Scan QR Material.
-                  </p>
                 </div>
 
                 {/* Desktop Table with Cleaned Data Columns */}
@@ -3011,12 +3272,12 @@ export default function App() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        <th className="py-2 px-3">Kolom C: NO MATERIAL</th>
-                        <th className="py-2 px-3">Kolom D: SPESIFIKASI</th>
-                        <th className="py-2 px-3">Kolom F: KATEGORI</th>
+                        <th className="py-2 px-3">No. Material</th>
+                        <th className="py-2 px-3">Spesifikasi</th>
+                        <th className="py-2 px-3">Kategori</th>
                         <th className="py-2 px-3 text-right">Total Unit</th>
-                        <th className="py-2 px-3 text-right">Status: STOK SIAP</th>
-                        <th className="py-2 px-3 text-right">Status: TERPAKAI</th>
+                        <th className="py-2 px-3 text-right">Stok Siap</th>
+                        <th className="py-2 px-3 text-right">Terpakai</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3025,7 +3286,7 @@ export default function App() {
                           colSpan={6}
                           className="py-6 px-4 text-center text-xs text-slate-400 dark:text-slate-500"
                         >
-                          Belum ada data rekapitulasi stok material (0 unit). Data akan otomatis terisi setelah Scan QR Material.
+                          Belum ada data rekapitulasi stok material (0 unit).
                         </td>
                       </tr>
                     </tbody>
@@ -3036,15 +3297,8 @@ export default function App() {
           </section>
         )}
 
-        {/* ===================================================================
-            SECTION 3: LIVE SPREADSHEET VIEW
-            Supports switching between Sheet 1: "MATERIAL_MASUK" (gid=0) and
-            Sheet 2: "MATERIAL_KELUAR" (gid=164626621)
-        ==================================================================== */}
-        {(activeSection === 'rekap' ||
-          activeSection === 'spreadsheet' ||
-          activeSection === 'keluar' ||
-          activeSection === 'masuk') && (
+        {/* Bottom Sheet & List Material section removed per user request */}
+        {false && (
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
             {/* Google Spreadsheet Sheet Tab Bar */}
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
@@ -3605,9 +3859,87 @@ export default function App() {
         )}
 
         {/* ===================================================================
-            SECTION 4: RIWAYAT TRANSAKSI & LOG PERINGATAN SCAN QR
+            SECTION 3B: MENU REALISASI YANTEK
         ==================================================================== */}
-        {activeSection === 'riwayat' && (
+        {selectedModule === 'yantek' && (
+          <RealisasiYantekView
+            segments={yantekSegments}
+            pekerjaanCatalog={yantekPekerjaanCatalog}
+            reports={yantekReports}
+            accessToken={accessToken}
+            needsAuth={needsAuth}
+            onUpdateDatabaseFromSheet={(newSegments, newPekerjaan) => {
+              setYantekSegments(newSegments);
+              setYantekPekerjaanCatalog(newPekerjaan);
+            }}
+            onReportCreated={(_newReport, allReports) => {
+              setYantekReports(allReports);
+            }}
+            onDeleteReport={async (reportId) => {
+              setYantekReports((prev) => prev.filter((r) => r.id !== reportId));
+              try {
+                const res = await fetch(`/api/yantek/reports/${encodeURIComponent(reportId)}`, {
+                  method: 'DELETE',
+                });
+                const rawText = await res.text();
+                const trimmed = rawText.trim();
+                if (trimmed && !trimmed.startsWith('<')) {
+                  const data = JSON.parse(trimmed);
+                  if (Array.isArray(data.reports)) {
+                    setYantekReports(data.reports);
+                  }
+                }
+              } catch {
+                // Ignore if offline
+              }
+            }}
+            onTriggerSound={triggerSound}
+          />
+        )}
+
+        {/* ===================================================================
+            SECTION 3C: MENU REALISASI HAR VOLUME BASED
+        ==================================================================== */}
+        {selectedModule === 'hvb' && (
+          <RealisasiHvbView
+            segments={yantekSegments}
+            pekerjaanCatalog={yantekPekerjaanCatalog}
+            reports={hvbReports}
+            accessToken={accessToken}
+            needsAuth={needsAuth}
+            onUpdateDatabaseFromSheet={(newSegments, newPekerjaan) => {
+              setYantekSegments(newSegments);
+              setYantekPekerjaanCatalog(newPekerjaan);
+            }}
+            onReportCreated={(_newReport, allReports) => {
+              setHvbReports(allReports);
+            }}
+            onDeleteReport={async (reportId) => {
+              setHvbReports((prev) => prev.filter((r) => r.id !== reportId));
+              try {
+                const res = await fetch(`/api/hvb/reports/${encodeURIComponent(reportId)}`, {
+                  method: 'DELETE',
+                });
+                const rawText = await res.text();
+                const trimmed = rawText.trim();
+                if (trimmed && !trimmed.startsWith('<')) {
+                  const data = JSON.parse(trimmed);
+                  if (Array.isArray(data.reports)) {
+                    setHvbReports(data.reports);
+                  }
+                }
+              } catch {
+                // Ignore if offline
+              }
+            }}
+            onTriggerSound={triggerSound}
+          />
+        )}
+
+        {/* ===================================================================
+            SECTION 4: RIWAYAT TRANSAKSI & LOG PERINGATAN SCAN QR (MENU LOGISTIK ONLY)
+        ==================================================================== */}
+        {selectedModule === 'logistik' && activeSection === 'riwayat' && (
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
             <div className="border-b border-slate-200 dark:border-slate-800 pb-3.5">
               <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white font-display">
@@ -3735,92 +4067,130 @@ export default function App() {
 
       {/* =====================================================================
           MOBILE FLOATING BOTTOM NAVIGATION DOCK (md:hidden)
-          Tombol MASUK berada di posisi Pertama / Kiri
-          Urutan: Masuk | Keluar | Rekap Stok | Riwayat
+          Hanya menampilkan navigasi sesuai menu aktif
       ====================================================================== */}
-      <div className="md:hidden fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+14px)] z-40 pointer-events-none">
-        <nav
-          aria-label="Navigasi Utama Mobile"
-          className="pointer-events-auto mx-auto max-w-md bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-4 items-center gap-1 p-1.5"
-        >
-          {/* Posisi 1 (Pertama / Kiri): Masuk */}
-          <button
-            type="button"
-            onClick={() => setActiveSection('masuk')}
-            className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
-              activeSection === 'masuk'
-                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold shadow-2xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
+      <div className="md:hidden fixed left-2.5 right-2.5 bottom-[calc(env(safe-area-inset-bottom,0px)+14px)] z-40 pointer-events-none">
+        {selectedModule === 'logistik' ? (
+          <nav
+            aria-label="Navigasi Utama Mobile Logistik"
+            className="pointer-events-auto mx-auto max-w-lg bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-4 items-center gap-1 p-1.5"
           >
-            <div className="relative">
-              <ArrowDownLeft className="w-5 h-5" />
-              {inboundReadyList.length > 0 && (
-                <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
-                  {inboundReadyList.length}
-                </span>
+            {/* Posisi 1 (Pertama / Kiri): Masuk */}
+            <button
+              type="button"
+              onClick={() => setActiveSection('masuk')}
+              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+                activeSection === 'masuk'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold shadow-2xs'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <div className="relative">
+                <ArrowDownLeft className="w-5 h-5" />
+                {inboundReadyList.length > 0 && (
+                  <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
+                    {inboundReadyList.length}
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                Masuk
+              </span>
+            </button>
+
+            {/* Posisi 2: Keluar */}
+            <button
+              type="button"
+              onClick={() => setActiveSection('keluar')}
+              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+                activeSection === 'keluar'
+                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold shadow-2xs'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <div className="relative">
+                <ArrowUpRight className="w-5 h-5" />
+                {outboundReadyList.length > 0 && (
+                  <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
+                    {outboundReadyList.length}
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                Keluar
+              </span>
+            </button>
+
+            {/* Posisi 3: Rekap Stok */}
+            <button
+              type="button"
+              onClick={() => setActiveSection('rekap')}
+              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+                activeSection === 'rekap' || activeSection === 'spreadsheet'
+                  ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                Rekap Stok
+              </span>
+            </button>
+
+            {/* Posisi 4: Riwayat */}
+            <button
+              type="button"
+              onClick={() => setActiveSection('riwayat')}
+              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+                activeSection === 'riwayat'
+                  ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <History className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                Riwayat
+              </span>
+            </button>
+          </nav>
+        ) : (
+          <nav
+            aria-label="Navigasi Utama Mobile Realisasi"
+            className="pointer-events-auto mx-auto max-w-md bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-2 items-center gap-1 p-1.5"
+          >
+            <button
+              type="button"
+              onClick={() =>
+                setActiveSection(selectedModule === 'yantek' ? 'yantek' : 'hvb')
+              }
+              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl font-bold shadow-2xs ${
+                selectedModule === 'yantek'
+                  ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+              }`}
+            >
+              {selectedModule === 'yantek' ? (
+                <Wrench className="w-5 h-5" />
+              ) : (
+                <ClipboardCheck className="w-5 h-5" />
               )}
-            </div>
-            <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-              Masuk
-            </span>
-          </button>
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                {selectedModule === 'yantek' ? 'Realisasi Yantek' : 'Realisasi HVB'}
+              </span>
+            </button>
 
-          {/* Posisi 2: Keluar */}
-          <button
-            type="button"
-            onClick={() => setActiveSection('keluar')}
-            className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
-              activeSection === 'keluar'
-                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold shadow-2xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            <div className="relative">
-              <ArrowUpRight className="w-5 h-5" />
-              {outboundReadyList.length > 0 && (
-                <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
-                  {outboundReadyList.length}
-                </span>
-              )}
-            </div>
-            <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-              Keluar
-            </span>
-          </button>
-
-          {/* Posisi 3: Rekap Stok (Menggantikan tombol menu Material Masuk) */}
-          <button
-            type="button"
-            onClick={() => setActiveSection('rekap')}
-            className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
-              activeSection === 'rekap' || activeSection === 'spreadsheet'
-                ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            <Layers className="w-5 h-5" />
-            <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-              Rekap Stok
-            </span>
-          </button>
-
-          {/* Posisi 4: Riwayat */}
-          <button
-            type="button"
-            onClick={() => setActiveSection('riwayat')}
-            className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
-              activeSection === 'riwayat'
-                ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            <History className="w-5 h-5" />
-            <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-              Riwayat
-            </span>
-          </button>
-        </nav>
+            <button
+              type="button"
+              onClick={() => setIsLoginPageOpen(true)}
+              className="min-h-[46px] flex flex-col items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all"
+            >
+              <LogOut className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+                Pilih Menu / Login
+              </span>
+            </button>
+          </nav>
+        )}
       </div>
 
       {/* =====================================================================
@@ -3895,6 +4265,17 @@ export default function App() {
                 Scan QR Code Ini untuk Material Keluar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          LOADING OVERLAY SAAT PENGIRIMAN DATA LOGISTIK
+      ====================================================================== */}
+      {(isProcessingInbound || isProcessingOutbound) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs">
+          <div className="w-20 h-20 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl flex items-center justify-center">
+            <RefreshCw className="w-10 h-10 text-emerald-600 dark:text-emerald-400 animate-spin" />
           </div>
         </div>
       )}
@@ -4033,36 +4414,46 @@ export default function App() {
         onRequestSyncMimsSheet={requestSyncMimsSheet}
         onRequestCreateNewGoogleSheet={requestCreateNewGoogleSheet}
         onSyncUrl={async (url) => {
-          const res = await fetch('/api/sync/sheet', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ googleSheetUrl: url }),
-          });
-          const data = await res.json();
-          if (data.rows) setRows(data.rows);
-          if (data.stats) setStats(data.stats);
-          if (data.logs) setLogs(data.logs);
-          if (data.sheetConfig) setSheetConfig(data.sheetConfig);
-          setInlineBanner({
-            type: 'success',
-            title: 'Sinkronisasi Spreadsheet Berhasil',
-            message: data.message,
-          });
+          try {
+            const res = await fetch('/api/sync/sheet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ googleSheetUrl: url }),
+            });
+            const rawText = await res.text();
+            const trimmed = rawText.trim();
+            if (trimmed && !trimmed.startsWith('<')) {
+              const data = JSON.parse(trimmed);
+              if (data.rows) setRows(data.rows);
+              if (data.stats) setStats(data.stats);
+              if (data.logs) setLogs(data.logs);
+              if (data.sheetConfig) setSheetConfig(data.sheetConfig);
+            }
+          } catch {
+            // Ignore
+          }
         }}
         onResetData={async () => {
-          const res = await fetch('/api/reset', { method: 'POST' });
-          const data = await res.json();
-          if (data.rows) setRows(data.rows);
-          if (Array.isArray(data.eksekusiMimsRows)) setEksekusiMimsRows(data.eksekusiMimsRows);
-          if (data.stats) setStats(data.stats);
-          if (data.logs) setLogs(data.logs);
+          try {
+            const res = await fetch('/api/reset', { method: 'POST' });
+            const rawText = await res.text();
+            const trimmed = rawText.trim();
+            if (trimmed && !trimmed.startsWith('<')) {
+              const data = JSON.parse(trimmed);
+              if (data.rows) setRows(data.rows);
+              if (Array.isArray(data.eksekusiMimsRows)) setEksekusiMimsRows(data.eksekusiMimsRows);
+              if (data.stats) setStats(data.stats);
+              if (data.logs) setLogs(data.logs);
+            } else {
+              setRows([]);
+              setEksekusiMimsRows([]);
+            }
+          } catch {
+            setRows([]);
+            setEksekusiMimsRows([]);
+          }
           setInboundReadyList([]);
           setOutboundReadyList([]);
-          setInlineBanner({
-            type: 'success',
-            title: 'Data Spreadsheet Direset ke Awal',
-            message: data.message,
-          });
         }}
       />
 

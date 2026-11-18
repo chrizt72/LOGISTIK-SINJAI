@@ -92,3 +92,71 @@ export interface WarehouseStats {
     stokTerpakai: number;
   }[];
 }
+
+export const YANTEK_PELAKSANA_UNITS = [
+  'UNIT 21 SINJAI',
+  'UNIT 22 SINJAI',
+  'UNIT 23 BIKERU',
+  'UNIT 24 SAMAENRE',
+  'UNIT 25 TASILILU',
+  'UNIT KP PASIR PUTIH',
+] as const;
+
+export type YantekPelaksanaUnit = (typeof YANTEK_PELAKSANA_UNITS)[number];
+
+export interface YantekDatabaseSegment {
+  rowNumber: number; // Row in DATA_BASE gid=0 (starts at 2)
+  penyulang: string; // Col A: PENYULANG
+  keypoint: string; // Col B: KEYPOINT
+  segment: string; // Col C: SEGMENT
+  panjangKms: string; // Col D: PANJANG KMS
+}
+
+export interface YantekWorkItemInput {
+  id: string;
+  detailPekerjaan: string; // Col E: DETAIL PEKERJAAN (Row E2 - E64)
+  volume: number; // Volume Pekerjaan (angka)
+}
+
+export interface YantekRealisasiReport {
+  id: string;
+  reportRowNumber: number;
+  timestampLaporan: string;
+  tanggalLaporan: string;
+  unitPelaksana: string;
+  penyulang: string;
+  keypoint: string;
+  segment: string;
+  panjangKms: string;
+  pekerjaanList: YantekWorkItemInput[];
+  koordinatAwal: string;
+  koordinatAkhir: string;
+  realisasiWo: number;
+  realisasiP0: number;
+  petugasPelapor?: string;
+}
+
+export const HVB_PELAKSANA_UNITS = [
+  'HVB 1',
+  'HVB 2',
+  'HVB 1 & 2',
+] as const;
+
+export type HvbPelaksanaUnit = (typeof HVB_PELAKSANA_UNITS)[number];
+
+export interface HvbRealisasiReport {
+  id: string;
+  reportRowNumber: number;
+  timestampLaporan: string;
+  tanggalLaporan: string;
+  unitPelaksana: string;
+  penyulang: string;
+  keypoint: string;
+  segment: string;
+  panjangKms: string;
+  pekerjaanList: YantekWorkItemInput[];
+  koordinatAwal: string;
+  koordinatAkhir: string;
+  petugasPelapor?: string;
+}
+

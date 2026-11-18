@@ -25,6 +25,8 @@ import {
   extractSpreadsheetId,
   listDriveSpreadsheets,
   getSpreadsheetMetadata,
+  initializeAndFormatEmptySpreadsheet,
+  isTeknikSpreadsheetTitle,
   FIREBASE_PROJECT_ID,
   FIREBASE_AUTH_DOMAINS_URL,
 } from '../services/googleWorkspace';
@@ -97,9 +99,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
   onResetData,
 }) => {
   const [urlInput, setUrlInput] = useState(sheetConfig.googleSheetUrl || '');
-  const [newSheetTitle, setNewSheetTitle] = useState(
-    'LOGISTIK_SINJAI - MATERIAL_MASUK & MATERIAL_KELUAR'
-  );
+  const [newSheetTitle, setNewSheetTitle] = useState('LOGISTIK SINJAI');
   const [driveFiles, setDriveFiles] = useState<DriveSpreadsheetFile[]>([]);
   const [isLoadingDrive, setIsLoadingDrive] = useState(false);
   const [isInspectingSheet, setIsInspectingSheet] = useState(false);
@@ -172,7 +172,16 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
     setIsInspectingSheet(true);
     setLocalError(null);
     try {
-      const meta = await getSpreadsheetMetadata(accessToken, sheetId);
+      const preMeta = await getSpreadsheetMetadata(accessToken, sheetId);
+      if (isTeknikSpreadsheetTitle(preMeta.title)) {
+        setLocalError(
+          `Spreadsheet "${preMeta.title}" adalah sumber data untuk Menu Yantek & Realisasi HVB. Untuk Menu Logistik, silakan gunakan Spreadsheet "LOGISTIK SINJAI".`
+        );
+        return;
+      }
+      const meta = await initializeAndFormatEmptySpreadsheet(accessToken, sheetId).catch(() =>
+        preMeta
+      );
       const preferredTab =
         meta.sheets.find(
           (s) =>
@@ -185,7 +194,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
       onConnectSpreadsheet(meta, preferredTab);
       setUrlInput(meta.spreadsheetUrl);
     } catch (err: any) {
-      setLocalError(err?.message || 'Gagal membaca metadata Google Spreadsheet.');
+      setLocalError(err?.message || 'Gagal membaca atau memformat Google Spreadsheet.');
     } finally {
       setIsInspectingSheet(false);
     }
@@ -237,7 +246,7 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
           <div className="flex items-center gap-2.5 min-w-0">
             <FileSpreadsheet className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-              Integrasi Sheet &quot;MATERIAL_MASUK&quot; &amp; &quot;MATERIAL_KELUAR&quot;
+              Integrasi &amp; Format Otomatis Spreadsheet &quot;LOGISTIK_SINJAI&quot;
             </h3>
           </div>
           <button
@@ -251,22 +260,24 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
-          {/* Info Banner on 2-Sheet Architecture */}
+          {/* Info Banner on 3-Sheet Architecture for Empty LOGISTIK_SINJAI */}
           <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/70 space-y-1.5 text-xs">
             <div className="flex items-center gap-2 font-bold text-amber-950 dark:text-amber-200">
               <Clock className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                Sinkronisasi Sheet &quot;MATERIAL_MASUK&quot; (gid=0) &amp; &quot;MATERIAL_KELUAR&quot;
-                (gid=164626621)
+                Format Otomatis 3 Sheet pada Spreadsheet Kosong &quot;LOGISTIK_SINJAI&quot;
               </span>
             </div>
             <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-              Setiap kali <strong>Material Masuk</strong> di-scan QR, baris baru ditambahkan ke Sheet{' '}
-              <code className="font-mono font-bold">MATERIAL_MASUK</code> (gid=0) dengan keterangan{' '}
-              <strong>STOK SIAP</strong>. Saat <strong>Material Keluar</strong> di-scan QR, statusnya
-              pada <code className="font-mono font-bold">MATERIAL_MASUK</code> berubah menjadi{' '}
-              <strong>TERPAKAI</strong> dan otomatis tercatat ke Sheet{' '}
-              <code className="font-mono font-bold">MATERIAL_KELUAR</code> (gid=164626621).
+              Saat menghubungkan file <code className="font-mono font-bold">LOGISTIK_SINJAI</code>{' '}
+              yang masih berupa <strong>sheet kosong</strong>, aplikasi otomatis menyesuaikan nama
+              tab &amp; header kolom sesuai inputan aplikasi:{' '}
+              <code className="font-mono font-bold">MATERIAL_MASUK</code> (gid=0 · Kolom A–O untuk
+              Menu Masuk Scan &amp; Manual),{' '}
+              <code className="font-mono font-bold">MATERIAL_KELUAR</code> (gid=164626621 · Kolom
+              A–R untuk Menu Keluar Scan &amp; Manual), dan{' '}
+              <code className="font-mono font-bold">REKAP_STOK</code> (gid=164626622 · Kolom A–G
+              untuk Menu Rekap Stok).
             </p>
           </div>
 
@@ -530,19 +541,31 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
 
               <div className="pt-2 border-t border-emerald-200/70 dark:border-emerald-800/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
                 <span className="text-xs text-slate-700 dark:text-slate-300">
-                  Sheet <code className="font-mono font-bold">MATERIAL_KELUAR</code> (gid=164626621 ·{' '}
-                  {mimsRowsCount} baris keluar):
+                  Format Sheet Kosong (<code className="font-mono font-bold">MATERIAL_MASUK</code>,{' '}
+                  <code className="font-mono font-bold">MATERIAL_KELUAR</code>,{' '}
+                  <code className="font-mono font-bold">REKAP_STOK</code>):
                 </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onRequestSyncMimsSheet(connectedSheet.spreadsheetId, connectedSheet.title)
-                  }
-                  className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors flex items-center justify-center gap-1.5"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Format &amp; Kirim ke Tab MATERIAL_KELUAR</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleInspectSpreadsheetId(connectedSheet.spreadsheetId)}
+                    disabled={isInspectingSheet}
+                    className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isInspectingSheet ? 'animate-spin' : ''}`} />
+                    <span>Format 3 Sheet Sesuai Input Aplikasi</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onRequestSyncMimsSheet(connectedSheet.spreadsheetId, connectedSheet.title)
+                    }
+                    className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Kirim MATERIAL_KELUAR ({mimsRowsCount})</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -554,12 +577,13 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2.5">
                 <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                   <Plus className="w-4 h-4 text-emerald-600" />
-                  <span>Buat Spreadsheet Baru (2 Sheet)</span>
+                  <span>Buat Spreadsheet Baru (3 Sheet Lengkap)</span>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Membuat file Google Spreadsheet baru dengan Tab{' '}
-                  <code className="font-mono">MATERIAL_MASUK</code> (gid=0 · {totalRows} baris) dan Tab{' '}
-                  <code className="font-mono">MATERIAL_KELUAR</code> (gid=164626621 · {mimsRowsCount} baris).
+                  <code className="font-mono">MATERIAL_MASUK</code> (gid=0 · {totalRows} baris),{' '}
+                  <code className="font-mono">MATERIAL_KELUAR</code> (gid=164626621 · {mimsRowsCount} baris), &amp;{' '}
+                  <code className="font-mono">REKAP_STOK</code> (gid=164626622).
                 </p>
                 <input
                   type="text"
@@ -600,29 +624,37 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                   <div className="text-xs text-slate-500 py-4 text-center">
                     Memuat daftar Spreadsheet dari Google Drive...
                   </div>
-                ) : driveFiles.length === 0 ? (
-                  <div className="text-xs text-slate-500 py-4 text-center">
-                    Belum ada file Google Spreadsheet yang ditemukan di Drive.
-                  </div>
-                ) : (
-                  <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
-                    {driveFiles.map((file) => (
-                      <button
-                        key={file.id}
-                        type="button"
-                        onClick={() => handleInspectSpreadsheetId(file.id)}
-                        className="w-full p-2.5 text-left rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-sky-500 transition-colors flex items-center justify-between gap-2 text-xs"
-                      >
-                        <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                          {file.name}
-                        </span>
-                        <span className="text-[11px] font-semibold text-sky-600 shrink-0">
-                          Hubungkan
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                ) : (() => {
+                  const logistikCandidates = driveFiles.filter(
+                    (f) => !isTeknikSpreadsheetTitle(f.name)
+                  );
+                  if (logistikCandidates.length === 0) {
+                    return (
+                      <div className="text-xs text-slate-500 py-4 text-center">
+                        Belum ada file Google Spreadsheet Logistik yang ditemukan di Drive.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                      {logistikCandidates.map((file) => (
+                        <button
+                          key={file.id}
+                          type="button"
+                          onClick={() => handleInspectSpreadsheetId(file.id)}
+                          className="w-full p-2.5 text-left rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-sky-500 transition-colors flex items-center justify-between gap-2 text-xs"
+                        >
+                          <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                            {file.name}
+                          </span>
+                          <span className="text-[11px] font-semibold text-sky-600 shrink-0">
+                            Hubungkan
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
