@@ -160,3 +160,58 @@ export interface HvbRealisasiReport {
   petugasPelapor?: string;
 }
 
+export interface TrafoData {
+  merk: string;
+  daya: number;
+  kapasitasKva?: number;
+  type: string;
+  jenisMinyak: string;
+  nomorSeri: string;
+  tahunBuat: string;
+  impedansi: string;
+  teganganPrimer: string;
+  teganganSekunder: string;
+  arusPrimer: number;
+  arusSekunder: number;
+  volumeMinyak: string | number;
+  beratTotal: number;
+  fasa?: string;
+  konstruksi?: string;
+  teganganNominal?: string;
+  arusNominalA?: number;
+  beratKg?: number;
+}
+
+export type TrafoRecordType = 'MUTASI' | 'SISIP';
+
+export interface TrafoManagementRecord {
+  id: string;
+  nomorLaporan: string;
+  tanggal: string;
+  timestampLaporan: string;
+  jenisPekerjaan: TrafoRecordType;
+  sumberMenu: 'YANTEK' | 'HVB';
+  unitPelaksana: string;
+  garduId: string;
+  namaGardu: string;
+  penyulang: string;
+  lokasi: string;
+  koordinat: {
+    lat: number;
+    lng: number;
+  };
+  alasanPenggantian: string;
+  trafoLama: TrafoData;
+  trafoBaru: TrafoData;
+  namaPengawas: string;
+  nipPengawas: string;
+  tandaTanganPengawasUrl?: string;
+  fotoNameplateLamaUrl?: string;
+  fotoNameplateBaruUrl?: string;
+  fotoSebelumUrl?: string;
+  fotoSesudahUrl?: string;
+  statusApproval: 'PENDING' | 'SELESAI';
+  createdAt: string;
+}
+
+

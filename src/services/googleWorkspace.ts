@@ -14,6 +14,7 @@ import {
   YantekRealisasiReport,
   HvbRealisasiReport,
   YantekDatabaseSegment,
+  TrafoManagementRecord,
 } from '../types/warehouse';
 import { DEFAULT_TEKNIK_SINJAI_DATA } from '../data/teknikSinjaiDatabase';
 
@@ -527,23 +528,42 @@ export function isLogistikSpreadsheetTitle(title: string): boolean {
   return norm.includes('LOGISTIK') && !norm.includes('TEKNIK');
 }
 
+export function findAllLogistikSinjaiSpreadsheets(
+  files: DriveSpreadsheetFile[]
+): DriveSpreadsheetFile[] {
+  const candidates = files.filter((f) => !isTeknikSpreadsheetTitle(f.name));
+  const exactSpace = candidates.filter(
+    (f) => String(f.name || '').trim().toUpperCase() === 'LOGISTIK SINJAI'
+  );
+  const exactNormalized = candidates.filter(
+    (f) =>
+      normalizeSpreadsheetName(f.name) === 'LOGISTIK SINJAI' &&
+      String(f.name || '').trim().toUpperCase() !== 'LOGISTIK SINJAI'
+  );
+  const partialMatches = candidates.filter((f) => {
+    const n = normalizeSpreadsheetName(f.name);
+    return (
+      n !== 'LOGISTIK SINJAI' &&
+      (n.includes('LOGISTIK SINJAI') ||
+        n.includes('SINJAI BENDERANG') ||
+        n.includes('LOGISTIK EHAO') ||
+        n.includes('LOGISTIK'))
+    );
+  });
+
+  const combined = [...exactSpace, ...exactNormalized, ...partialMatches];
+  const seen = new Set<string>();
+  return combined.filter((f) => {
+    if (!f?.id || seen.has(f.id)) return false;
+    seen.add(f.id);
+    return true;
+  });
+}
+
 export function findLogistikSinjaiSpreadsheet(
   files: DriveSpreadsheetFile[]
 ): DriveSpreadsheetFile | undefined {
-  const candidates = files.filter((f) => !isTeknikSpreadsheetTitle(f.name));
-  return (
-    candidates.find((f) => String(f.name || '').trim().toUpperCase() === 'LOGISTIK SINJAI') ||
-    candidates.find((f) => normalizeSpreadsheetName(f.name) === 'LOGISTIK SINJAI') ||
-    candidates.find((f) => {
-      const n = normalizeSpreadsheetName(f.name);
-      return (
-        n.includes('LOGISTIK SINJAI') ||
-        n.includes('SINJAI BENDERANG') ||
-        n.includes('LOGISTIK EHAO')
-      );
-    }) ||
-    candidates.find((f) => normalizeSpreadsheetName(f.name).includes('LOGISTIK'))
-  );
+  return findAllLogistikSinjaiSpreadsheets(files)[0];
 }
 
 export function findAllTeknikSinjaiSpreadsheets(
@@ -582,6 +602,35 @@ export function findTeknikSinjaiSpreadsheet(
   files: DriveSpreadsheetFile[]
 ): DriveSpreadsheetFile | undefined {
   return findAllTeknikSinjaiSpreadsheets(files)[0];
+}
+
+export function findAllMasterGarduOrTrafoSpreadsheets(
+  files: DriveSpreadsheetFile[]
+): DriveSpreadsheetFile[] {
+  const candidates = files.filter((f) => !isLogistikSpreadsheetTitle(f.name));
+  const exactMasterGardu = candidates.filter((f) => {
+    const n = normalizeSpreadsheetName(f.name);
+    return n === 'MASTER GARDU' || n === 'MANAJEMEN TRAFO' || n === 'SISIP TRAFO';
+  });
+  const partialMatches = candidates.filter((f) => {
+    const n = normalizeSpreadsheetName(f.name);
+    return (
+      n !== 'MASTER GARDU' &&
+      n !== 'MANAJEMEN TRAFO' &&
+      n !== 'SISIP TRAFO' &&
+      (n.includes('MASTER GARDU') ||
+        n.includes('GARDU') ||
+        n.includes('TRAFO'))
+    );
+  });
+
+  const combined = [...exactMasterGardu, ...partialMatches];
+  const seen = new Set<string>();
+  return combined.filter((f) => {
+    if (!f?.id || seen.has(f.id)) return false;
+    seen.add(f.id);
+    return true;
+  });
 }
 
 let driveFilesCache: { files: DriveSpreadsheetFile[]; timestamp: number } | null = null;
@@ -743,6 +792,51 @@ export const REKAP_STOK_HEADERS = [
   'WAKTU UPDATE REKAP',
 ];
 
+const GOOGLE_SHEETS_EPOCH_UTC_MS = Date.UTC(1899, 11, 30, 0, 0, 0);
+
+export function normalizeSpreadsheetDateTime(
+  raw: unknown,
+  forceTimeIfSerial = true
+): string {
+  const cleaned = String(raw ?? '')
+    .trim()
+    .replace(/^'+/, '');
+  if (!cleaned) return '';
+
+  // Detect Google Sheets / Excel Lotus serial date numbers (e.g. "46344.10299", "46344,10299", "46344")
+  if (/^\d{5}(?:[.,]\d+)?$/.test(cleaned)) {
+    const normalizedNumStr = cleaned.replace(',', '.');
+    const serial = Number(normalizedNumStr);
+    if (Number.isFinite(serial) && serial >= 35000 && serial <= 75000) {
+      const totalSeconds = Math.round(serial * 86400);
+      const dt = new Date(GOOGLE_SHEETS_EPOCH_UTC_MS + totalSeconds * 1000);
+      const yyyy = dt.getUTCFullYear();
+      const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getUTCDate()).padStart(2, '0');
+      const hasFraction =
+        normalizedNumStr.includes('.') && Math.abs(serial - Math.round(serial)) > 1e-6;
+      if (hasFraction || forceTimeIfSerial) {
+        const hh = String(dt.getUTCHours()).padStart(2, '0');
+        const min = String(dt.getUTCMinutes()).padStart(2, '0');
+        const ss = String(dt.getUTCSeconds()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+      }
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  return cleaned;
+}
+
+export function formatSheetTextDateCell(
+  raw: unknown,
+  forceTimeIfSerial = true
+): string {
+  const normalized = normalizeSpreadsheetDateTime(raw, forceTimeIfSerial);
+  if (!normalized) return '';
+  return `'${normalized}`;
+}
+
 export function materialRowToSheetValues(row: MaterialRow): string[] {
   const isManual =
     row.snMaterial.startsWith('NONQR-') ||
@@ -750,7 +844,7 @@ export function materialRowToSheetValues(row: MaterialRow): string[] {
     row.kategori === 'Material Tanpa QR';
   const metodeInput = isManual ? 'MANUAL TANPA QR' : 'SCAN QR MASUK';
   return [
-    row.tanggalHistory || '',
+    formatSheetTextDateCell(row.tanggalHistory, true),
     row.snMaterial || '',
     row.noMaterial || '',
     row.spesifikasi || '',
@@ -759,7 +853,7 @@ export function materialRowToSheetValues(row: MaterialRow): string[] {
       : metodeInput,
     row.kategori || 'kWh Meter',
     row.noBatch || '-',
-    row.petugas || row.valuationType || 'Petugas Gudang ULP Sinjai',
+    String(row.petugas || '').trim() || '-',
     row.plant || '7417',
     row.storLoc || '2500',
     row.companyCode || '74',
@@ -777,7 +871,7 @@ export function mimsRowToSheetValues(row: EksekusiMimsRow): string[] {
     row.kategori === 'Material Tanpa QR';
   const metodeKeluar = isManual ? 'MANUAL TANPA QR' : 'SCAN QR KELUAR';
   return [
-    row.timestampEksekusi || '',
+    formatSheetTextDateCell(row.timestampEksekusi, true),
     row.snMaterial || '',
     row.noMaterial || '',
     row.spesifikasi || '',
@@ -795,7 +889,7 @@ export function mimsRowToSheetValues(row: EksekusiMimsRow): string[] {
     row.storLocName || 'Gd ULP Sinjai',
     row.status || 'TERPAKAI',
     row.noDokumen || 'BON-SINJAI',
-    row.petugas || 'Petugas Gudang ULP Sinjai',
+    String(row.petugas || '').trim() || '-',
     `MATERIAL_MASUK!Baris #${row.sourceMaterialRowNumber}`,
   ];
 }
@@ -848,7 +942,7 @@ export async function readMaterialRowsFromGoogleSheet(
 
     rows.push({
       rowNumber: i + 1,
-      tanggalHistory: String(parts[0] || '').trim(),
+      tanggalHistory: normalizeSpreadsheetDateTime(parts[0], true),
       snMaterial: sn,
       noMaterial: String(parts[2] || '').trim(),
       spesifikasi: String(parts[3] || '').trim(),
@@ -872,6 +966,106 @@ export async function readMaterialRowsFromGoogleSheet(
 
 export const MATERIAL_KELUAR_GID = 164626621;
 export const REKAP_STOK_GID = 164626622;
+
+const repairedDateSheetKeys = new Set<string>();
+
+async function repairSerialDateColumnInSheet(
+  accessToken: string,
+  spreadsheetId: string,
+  tabTitle: string,
+  sheetId?: number
+): Promise<void> {
+  try {
+    const colARange = encodeURIComponent(quoteSheetRange(tabTitle, 'A2:A2000'));
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+        spreadsheetId
+      )}/values/${colARange}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    if (!res.ok) return;
+
+    const data = await res.json().catch(() => ({}));
+    const values: string[][] = Array.isArray(data.values) ? data.values : [];
+
+    const updates: { range: string; majorDimension: string; values: string[][] }[] = [];
+    for (let i = 0; i < values.length; i++) {
+      const rawVal = String(values[i]?.[0] ?? '').trim();
+      if (!rawVal) continue;
+      if (/^\d{5}(?:[.,]\d+)?$/.test(rawVal)) {
+        const fixedText = formatSheetTextDateCell(rawVal, true);
+        const rowNum = i + 2;
+        updates.push({
+          range: quoteSheetRange(tabTitle, `A${rowNum}`),
+          majorDimension: 'ROWS',
+          values: [[fixedText]],
+        });
+      }
+    }
+
+    const formatKey = `${spreadsheetId}:${tabTitle}`;
+    if (typeof sheetId === 'number' && (!repairedDateSheetKeys.has(formatKey) || updates.length > 0)) {
+      repairedDateSheetKeys.add(formatKey);
+      await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                repeatCell: {
+                  range: {
+                    sheetId,
+                    startRowIndex: 1,
+                    startColumnIndex: 0,
+                    endColumnIndex: 1,
+                  },
+                  cell: {
+                    userEnteredFormat: {
+                      numberFormat: {
+                        type: 'TEXT',
+                      },
+                    },
+                  },
+                  fields: 'userEnteredFormat.numberFormat',
+                },
+              },
+            ],
+          }),
+        }
+      ).catch(() => {});
+    }
+
+    if (updates.length > 0) {
+      await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            valueInputOption: 'USER_ENTERED',
+            data: updates,
+          }),
+        }
+      ).catch(() => {});
+    }
+  } catch {
+    // Non-fatal background date repair
+  }
+}
 
 export async function ensureMaterialMasukSheetAndHeader(
   accessToken: string,
@@ -1053,6 +1247,13 @@ export async function ensureMaterialMasukSheetAndHeader(
     }
   }
 
+  await repairSerialDateColumnInSheet(
+    accessToken,
+    spreadsheetId,
+    resolvedTitle,
+    matchedSheet?.sheetId ?? 0
+  );
+
   return resolvedTitle;
 }
 
@@ -1215,6 +1416,13 @@ export async function ensureEksekusiMimsSheetAndHeader(
     }
   }
 
+  await repairSerialDateColumnInSheet(
+    accessToken,
+    spreadsheetId,
+    resolvedTitle,
+    matchedSheet?.sheetId ?? MATERIAL_KELUAR_GID
+  );
+
   return resolvedTitle;
 }
 
@@ -1341,7 +1549,7 @@ export async function ensureAndSyncRekapStokSheet(
       String(g.total),
       String(g.siapPakai),
       String(g.stokTerpakai),
-      nowStr,
+      formatSheetTextDateCell(nowStr, true),
     ]),
   ];
 
@@ -1876,13 +2084,20 @@ export async function updateOutboundStatusInGoogleSheet(
       dataPayload.push({
         range: quoteSheetRange(actualTab, `A${foundRowNum}`),
         majorDimension: 'ROWS',
-        values: [[row.tanggalHistory]],
+        values: [[formatSheetTextDateCell(row.tanggalHistory, true)]],
       });
       if (row.spesifikasi) {
         dataPayload.push({
           range: quoteSheetRange(actualTab, `D${foundRowNum}`),
           majorDimension: 'ROWS',
           values: [[row.spesifikasi]],
+        });
+      }
+      if (row.petugas) {
+        dataPayload.push({
+          range: quoteSheetRange(actualTab, `H${foundRowNum}`),
+          majorDimension: 'ROWS',
+          values: [[row.petugas]],
         });
       }
       dataPayload.push({
@@ -2021,9 +2236,10 @@ export const HVB_SHEET_HEADERS = [
 ];
 
 function normalizeSheetKeyCell(val: unknown): string {
-  return String(val ?? '')
+  return normalizeSpreadsheetDateTime(val, false)
     .trim()
     .toUpperCase()
+    .replace(/^'+/, '')
     .replace(/,/g, '.')
     .replace(/\b0+(\d)/g, '$1')
     .replace(/\s+/g, ' ');
@@ -2044,8 +2260,8 @@ export function yantekReportToSheetRows(report: YantekRealisasiReport): string[]
       : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
 
   return items.map((item) => [
-    report.timestampLaporan,
-    report.tanggalLaporan,
+    formatSheetTextDateCell(report.timestampLaporan, true),
+    formatSheetTextDateCell(report.tanggalLaporan, false),
     report.unitPelaksana,
     report.petugasPelapor || '-',
     report.penyulang,
@@ -2077,8 +2293,8 @@ export function hvbReportToSheetRows(report: HvbRealisasiReport): string[][] {
       : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
 
   return items.map((item) => [
-    report.timestampLaporan,
-    report.tanggalLaporan,
+    formatSheetTextDateCell(report.timestampLaporan, true),
+    formatSheetTextDateCell(report.tanggalLaporan, false),
     report.unitPelaksana,
     report.penyulang,
     report.keypoint,
@@ -2624,8 +2840,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
             const normalizedRow: string[] =
               row.length >= 16
                 ? [
-                    String(row[0] ?? ''),
-                    String(row[1] ?? ''),
+                    formatSheetTextDateCell(row[0], true),
+                    formatSheetTextDateCell(row[1], false),
                     String(row[2] ?? ''),
                     String(row[3] ?? ''),
                     String(row[4] ?? ''),
@@ -2640,9 +2856,11 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                     String(row[14] ?? ''),
                     String(row[16] || 'SELESAI'),
                   ]
-                : Array.from({ length: 15 }, (_, idx) =>
-                    String(row[idx] ?? (idx === 14 ? 'SELESAI' : ''))
-                  );
+                : Array.from({ length: 15 }, (_, idx) => {
+                    if (idx === 0) return formatSheetTextDateCell(row[0], true);
+                    if (idx === 1) return formatSheetTextDateCell(row[1], false);
+                    return String(row[idx] ?? (idx === 14 ? 'SELESAI' : ''));
+                  });
 
             const tsKey = makeYantekTsKey(normalizedRow);
             const contentKey = makeYantekContentKey(normalizedRow);
@@ -2801,8 +3019,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
               const normalizedRow: string[] =
                 row.length >= 13
                   ? [
-                      String(row[0] ?? ''),
-                      String(row[1] ?? ''),
+                      formatSheetTextDateCell(row[0], true),
+                      formatSheetTextDateCell(row[1], false),
                       String(row[2] ?? ''),
                       String(row[3] ?? ''),
                       String(row[4] ?? ''),
@@ -2814,9 +3032,11 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                       String(row[11] ?? ''),
                       String(row[13] || 'SELESAI'),
                     ]
-                  : Array.from({ length: 12 }, (_, idx) =>
-                      String(row[idx] ?? (idx === 11 ? 'SELESAI' : ''))
-                    );
+                  : Array.from({ length: 12 }, (_, idx) => {
+                      if (idx === 0) return formatSheetTextDateCell(row[0], true);
+                      if (idx === 1) return formatSheetTextDateCell(row[1], false);
+                      return String(row[idx] ?? (idx === 11 ? 'SELESAI' : ''));
+                    });
 
               const tsKey = makeHvbTsKey(normalizedRow);
               const contentKey = makeHvbContentKey(normalizedRow);
@@ -3354,6 +3574,466 @@ export async function createNewTeknikSinjaiGoogleSheet(
     { syncYantek: true, syncHvb: true, initDb: true }
   );
 }
+
+// ============================================================================
+// SINKRONISASI MANAJEMEN TRAFO & SISIP TRAFO KE SPREADSHEET MASTER GARDU / TEKNIK
+// ============================================================================
+
+export const MANAJEMEN_TRAFO_SHEET_GID = 2045619555;
+export const SISIP_TRAFO_SHEET_GID = 1390013841;
+export const MANAJEMEN_TRAFO_SHEET_TITLE = 'MANAJEMEN TRAFO';
+export const SISIP_TRAFO_SHEET_TITLE = ' SISIP TRAFO';
+export const TRAFO_SPREADSHEET_STORAGE_KEY = 'simlog_sinjai_trafo_sheet_v1';
+
+export const TRAFO_SHEET_HEADERS = [
+  'WAKTU LAPORAN',
+  'TANGGAL',
+  'JENIS PEKERJAAN',
+  'SUMBER MENU',
+  'NOMOR BERITA ACARA',
+  'UNIT PELAKSANA',
+  'ID GARDU / TIANG',
+  'NAMA GARDU',
+  'PENYULANG',
+  'LOKASI / ALAMAT',
+  'KOORDINAT (LAT, LNG)',
+  'ALASAN PEKERJAAN',
+  'MERK TRAFO LAMA',
+  'DAYA LAMA (KVA)',
+  'NO SERI LAMA',
+  'MERK TRAFO BARU / SISIP',
+  'DAYA BARU (KVA)',
+  'TYPE TRAFO BARU',
+  'JENIS MINYAK BARU',
+  'NO SERI BARU',
+  'TAHUN BUAT BARU',
+  'IMPEDANSI (%)',
+  'TEG. PRIMER',
+  'TEG. SEKUNDER',
+  'ARUS PRIMER (A)',
+  'ARUS SEKUNDER (A)',
+  'VOLUME MINYAK (L)',
+  'BERAT TOTAL (KG)',
+  'PENGAWAS PEKERJAAN',
+  'NIP PENGAWAS',
+  'STATUS',
+];
+
+export function trafoRecordToSheetRow(rec: TrafoManagementRecord): string[] {
+  return [
+    formatSheetTextDateCell(rec.timestampLaporan || rec.createdAt, true),
+    formatSheetTextDateCell(rec.tanggal, false),
+    rec.jenisPekerjaan === 'SISIP' ? 'SISIP TRAFO' : 'MUTASI TRAFO',
+    rec.sumberMenu,
+    rec.nomorLaporan,
+    rec.unitPelaksana,
+    rec.garduId,
+    rec.namaGardu,
+    rec.penyulang,
+    rec.lokasi || '-',
+    `${rec.koordinat?.lat ?? '-'}, ${rec.koordinat?.lng ?? '-'}`,
+    rec.alasanPenggantian || '-',
+    rec.jenisPekerjaan === 'SISIP' ? '-' : rec.trafoLama?.merk || '-',
+    rec.jenisPekerjaan === 'SISIP' ? '0' : String(rec.trafoLama?.daya || 0),
+    rec.jenisPekerjaan === 'SISIP' ? '-' : rec.trafoLama?.nomorSeri || '-',
+    rec.trafoBaru?.merk || '-',
+    String(rec.trafoBaru?.daya || rec.trafoBaru?.kapasitasKva || 0),
+    rec.trafoBaru?.type || '-',
+    rec.trafoBaru?.jenisMinyak || '-',
+    rec.trafoBaru?.nomorSeri || '-',
+    rec.trafoBaru?.tahunBuat || '-',
+    rec.trafoBaru?.impedansi || '-',
+    rec.trafoBaru?.teganganPrimer || '-',
+    rec.trafoBaru?.teganganSekunder || '-',
+    String(rec.trafoBaru?.arusPrimer ?? 0),
+    String(rec.trafoBaru?.arusSekunder ?? 0),
+    String(rec.trafoBaru?.volumeMinyak ?? '-'),
+    String(rec.trafoBaru?.beratTotal ?? 0),
+    rec.namaPengawas || '-',
+    rec.nipPengawas || '-',
+    rec.statusApproval || 'PENDING',
+  ];
+}
+
+function normalizeTrafoTabTitle(title: string): string {
+  return String(title || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function mapTrafoRecordToCustomHeaders(
+  headers: string[],
+  rec: TrafoManagementRecord
+): string[] {
+  return headers.map((rawHeader) => {
+    const h = String(rawHeader || '').trim().toUpperCase();
+    if (!h) return '';
+    if (h.includes('WAKTU') || h.includes('TIMESTAMP')) {
+      return formatSheetTextDateCell(rec.timestampLaporan || rec.createdAt, true);
+    }
+    if (h === 'TANGGAL' || h.includes('TGL')) {
+      return formatSheetTextDateCell(rec.tanggal, false);
+    }
+    if (h.includes('JENIS PEKERJAAN') || h === 'JENIS') {
+      return rec.jenisPekerjaan === 'SISIP' ? 'SISIP TRAFO' : 'MUTASI TRAFO';
+    }
+    if (h.includes('SUMBER')) return rec.sumberMenu;
+    if (h.includes('BERITA ACARA') || h.includes('NO BA') || h.includes('NOMOR LAPORAN') || h === 'NOMOR') {
+      return rec.nomorLaporan;
+    }
+    if (h.includes('UNIT') || h.includes('ULP')) return rec.unitPelaksana;
+    if (h.includes('ID GARDU') || h.includes('KODE GARDU') || h === 'TRAFO' || h === 'GARDU') {
+      return rec.garduId;
+    }
+    if (h.includes('NAMA GARDU')) return rec.namaGardu;
+    if (h.includes('PENYULANG')) return rec.penyulang;
+    if (h.includes('LOKASI') || h.includes('ALAMAT')) return rec.lokasi || '-';
+    if (h.includes('LAT') && !h.includes('LNG')) return String(rec.koordinat?.lat ?? '-');
+    if (h.includes('LNG') || h.includes('LONG') || h === 'Y') return String(rec.koordinat?.lng ?? '-');
+    if (h.includes('KOORDINAT')) {
+      return `${rec.koordinat?.lat ?? '-'}, ${rec.koordinat?.lng ?? '-'}`;
+    }
+    if (h.includes('ALASAN')) return rec.alasanPenggantian || '-';
+    if (h.includes('MERK') && h.includes('LAMA')) return rec.trafoLama?.merk || '-';
+    if (h.includes('DAYA') && h.includes('LAMA')) return String(rec.trafoLama?.daya || 0);
+    if (h.includes('SERI') && h.includes('LAMA')) return rec.trafoLama?.nomorSeri || '-';
+    if (h.includes('MERK')) return rec.trafoBaru?.merk || '-';
+    if (h.includes('DAYA') || h.includes('KVA') || h.includes('KAPASITAS')) {
+      return String(rec.trafoBaru?.daya || rec.trafoBaru?.kapasitasKva || 0);
+    }
+    if (h.includes('TYPE') || h.includes('TIPE') || h.includes('KONSTRUKSI')) {
+      return rec.trafoBaru?.type || '-';
+    }
+    if (h.includes('MINYAK') && !h.includes('VOLUME') && !h.includes('VOL')) {
+      return rec.trafoBaru?.jenisMinyak || '-';
+    }
+    if (h.includes('SERI')) return rec.trafoBaru?.nomorSeri || '-';
+    if (h.includes('TAHUN')) return rec.trafoBaru?.tahunBuat || '-';
+    if (h.includes('IMPEDANSI')) return rec.trafoBaru?.impedansi || '-';
+    if (h.includes('TEG') && h.includes('PRIMER')) return rec.trafoBaru?.teganganPrimer || '-';
+    if (h.includes('TEG') && h.includes('SEKUNDER')) return rec.trafoBaru?.teganganSekunder || '-';
+    if (h.includes('ARUS') && h.includes('PRIMER')) return String(rec.trafoBaru?.arusPrimer ?? 0);
+    if (h.includes('ARUS') && h.includes('SEKUNDER')) return String(rec.trafoBaru?.arusSekunder ?? 0);
+    if (h.includes('VOLUME') || h.includes('VOL')) return String(rec.trafoBaru?.volumeMinyak ?? '-');
+    if (h.includes('BERAT')) return String(rec.trafoBaru?.beratTotal ?? 0);
+    if (h.includes('PENGAWAS') || h.includes('PETUGAS')) return rec.namaPengawas || '-';
+    if (h.includes('NIP')) return rec.nipPengawas || '-';
+    if (h.includes('STATUS')) return rec.statusApproval || 'PENDING';
+    if (h.includes('FASA') || h.includes('PHASE')) return rec.trafoBaru?.fasa || '-';
+    return '';
+  });
+}
+
+export async function syncTrafoRecordsToSpreadsheet(
+  accessToken: string,
+  spreadsheetId: string,
+  records: TrafoManagementRecord[]
+): Promise<SpreadsheetMetadata> {
+  let meta = await getSpreadsheetMetadata(accessToken, spreadsheetId);
+  const mutasiRecords = records.filter((r) => r.jenisPekerjaan === 'MUTASI');
+  const sisipRecords = records.filter((r) => r.jenisPekerjaan === 'SISIP');
+
+  const targets: {
+    preferredGid: number;
+    defaultTitle: string;
+    rows: TrafoManagementRecord[];
+  }[] = [];
+
+  if (mutasiRecords.length > 0) {
+    targets.push({
+      preferredGid: MANAJEMEN_TRAFO_SHEET_GID,
+      defaultTitle: MANAJEMEN_TRAFO_SHEET_TITLE,
+      rows: mutasiRecords,
+    });
+  }
+  if (sisipRecords.length > 0) {
+    targets.push({
+      preferredGid: SISIP_TRAFO_SHEET_GID,
+      defaultTitle: SISIP_TRAFO_SHEET_TITLE,
+      rows: sisipRecords,
+    });
+  }
+
+  for (const target of targets) {
+    let tab =
+      meta.sheets.find((s) => s.sheetId === target.preferredGid) ||
+      meta.sheets.find((s) => s.title === target.defaultTitle) ||
+      meta.sheets.find(
+        (s) =>
+          normalizeTrafoTabTitle(s.title) ===
+          normalizeTrafoTabTitle(target.defaultTitle)
+      );
+
+    const tabTitle = tab ? tab.title : target.defaultTitle;
+    if (!tab) {
+      await sheetsFetchWithRetry(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                addSheet: {
+                  properties: {
+                    title: tabTitle,
+                    gridProperties: {
+                      rowCount: 1000,
+                      columnCount: TRAFO_SHEET_HEADERS.length,
+                      frozenRowCount: 1,
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+        }
+      );
+      invalidateSpreadsheetMetadataCache(spreadsheetId);
+      meta = await getSpreadsheetMetadata(accessToken, spreadsheetId, true);
+    }
+
+    let existingValues: string[][] = [];
+    const existingRes = await sheetsFetchWithRetry(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+        spreadsheetId
+      )}/values/${encodeURIComponent(quoteSheetRange(tabTitle, 'A1:AZ1000'))}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    ).catch(() => null);
+
+    if (existingRes && existingRes.ok) {
+      const json = await existingRes.json().catch(() => ({}));
+      existingValues = Array.isArray(json.values) ? json.values : [];
+    }
+
+    const row1 = (existingValues[0] || []).map((c) => String(c || '').trim());
+    const hasCustomExistingHeaders =
+      row1.some((c) => c.length > 0) &&
+      !(
+        row1[0]?.toUpperCase() === 'WAKTU LAPORAN' &&
+        row1[4]?.toUpperCase() === 'NOMOR BERITA ACARA'
+      );
+
+    if (hasCustomExistingHeaders) {
+      // Preserve custom Master Gardu headers & rows; align by column name or append
+      const baColIdx = row1.findIndex((c) => {
+        const u = c.toUpperCase();
+        return u.includes('BERITA ACARA') || u.includes('NO BA') || u.includes('NOMOR');
+      });
+      const garduColIdx = row1.findIndex((c) => {
+        const u = c.toUpperCase();
+        return u.includes('ID GARDU') || u === 'GARDU' || u === 'TRAFO';
+      });
+      const canMapCustom = baColIdx >= 0 || garduColIdx >= 0;
+
+      const updatedRows = existingValues.slice();
+      for (const rec of target.rows) {
+        const mappedRow = canMapCustom
+          ? mapTrafoRecordToCustomHeaders(row1, rec)
+          : trafoRecordToSheetRow(rec);
+        const baKey = String(rec.nomorLaporan || '').trim().toUpperCase();
+        const garduKey = String(rec.garduId || '').trim().toUpperCase();
+
+        const existingIdx = updatedRows.findIndex((r, idx) => {
+          if (idx === 0) return false;
+          const rBa = baColIdx >= 0 ? String(r[baColIdx] || '').trim().toUpperCase() : '';
+          const rGardu =
+            garduColIdx >= 0 ? String(r[garduColIdx] || '').trim().toUpperCase() : '';
+          if (baKey && rBa === baKey) return true;
+          return Boolean(baKey && r.some((cell) => String(cell || '').trim().toUpperCase() === baKey)) ||
+            Boolean(rBa && rBa === baKey && rGardu === garduKey);
+        });
+
+        if (existingIdx > 0) {
+          updatedRows[existingIdx] = mappedRow;
+        } else {
+          updatedRows.push(mappedRow);
+        }
+      }
+
+      await sheetsFetchWithRetry(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values/${encodeURIComponent(quoteSheetRange(tabTitle, 'A1'))}?valueInputOption=USER_ENTERED`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            majorDimension: 'ROWS',
+            values: updatedRows,
+          }),
+        }
+      );
+    } else {
+      const existingRowsMap = new Map<string, string[]>();
+      for (let i = 1; i < existingValues.length; i++) {
+        const row = existingValues[i];
+        if (!row || row.every((c) => !String(c || '').trim())) continue;
+        const baKey = String(row[4] || '').trim().toUpperCase();
+        const garduKey = String(row[6] || '').trim().toUpperCase();
+        if (baKey || garduKey) {
+          existingRowsMap.set(
+            `${baKey}|${garduKey}`,
+            row.map((c) => String(c ?? ''))
+          );
+        }
+      }
+
+      for (const rec of target.rows) {
+        const sheetRow = trafoRecordToSheetRow(rec);
+        const baKey = String(rec.nomorLaporan || '').trim().toUpperCase();
+        const garduKey = String(rec.garduId || '').trim().toUpperCase();
+        existingRowsMap.set(`${baKey}|${garduKey}`, sheetRow);
+      }
+
+      const allValues: string[][] = [
+        TRAFO_SHEET_HEADERS,
+        ...Array.from(existingRowsMap.values()),
+      ];
+      await sheetsFetchWithRetry(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values/${encodeURIComponent(quoteSheetRange(tabTitle, 'A1'))}?valueInputOption=USER_ENTERED`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            majorDimension: 'ROWS',
+            values: allValues,
+          }),
+        }
+      );
+    }
+  }
+
+  return meta;
+}
+
+export async function syncTrafoRecordsToAllTeknikSheets(
+  accessToken: string,
+  records: TrafoManagementRecord[],
+  preferredSpreadsheetId?: string
+): Promise<{
+  primaryMeta: SpreadsheetMetadata;
+  syncedCount: number;
+}> {
+  let savedTrafoSheetId: string | undefined;
+  try {
+    const raw = localStorage.getItem(TRAFO_SPREADSHEET_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.spreadsheetId) savedTrafoSheetId = String(parsed.spreadsheetId);
+    }
+  } catch {
+    // Ignore localStorage parse error
+  }
+
+  let files: DriveSpreadsheetFile[] = [];
+  try {
+    files = await listDriveSpreadsheets(accessToken);
+  } catch {
+    // Fallback to known spreadsheet IDs
+  }
+
+  const masterGarduFiles = findAllMasterGarduOrTrafoSpreadsheets(files);
+  const teknikFiles = findAllTeknikSinjaiSpreadsheets(files);
+
+  const candidateIds: string[] = [];
+  if (savedTrafoSheetId && !candidateIds.includes(savedTrafoSheetId)) {
+    candidateIds.push(savedTrafoSheetId);
+  }
+  if (preferredSpreadsheetId && !candidateIds.includes(preferredSpreadsheetId)) {
+    candidateIds.push(preferredSpreadsheetId);
+  }
+  for (const f of masterGarduFiles) {
+    if (!candidateIds.includes(f.id)) candidateIds.push(f.id);
+  }
+  for (const knownId of KNOWN_TEKNIK_SINJAI_SPREADSHEET_IDS) {
+    if (!candidateIds.includes(knownId)) candidateIds.push(knownId);
+  }
+  for (const f of teknikFiles) {
+    if (!candidateIds.includes(f.id)) candidateIds.push(f.id);
+  }
+
+  if (candidateIds.length === 0) {
+    const createdMeta = await createNewTeknikSinjaiGoogleSheet(accessToken, 'TEKNIK SINJAI');
+    candidateIds.push(createdMeta.spreadsheetId);
+  }
+
+  // Inspect metadata first to prioritize spreadsheets containing MANAJEMEN TRAFO (gid=2045619555)
+  // or SISIP TRAFO (gid=1390013841)
+  const inspected: { id: string; meta: SpreadsheetMetadata; hasTrafoTab: boolean }[] = [];
+  let lastError: any = null;
+
+  for (const id of candidateIds.slice(0, 8)) {
+    try {
+      const checkMeta = await getSpreadsheetMetadata(accessToken, id);
+      if (isLogistikSpreadsheetTitle(checkMeta.title)) continue;
+      const hasTrafoTab = checkMeta.sheets.some(
+        (s) =>
+          s.sheetId === MANAJEMEN_TRAFO_SHEET_GID ||
+          s.sheetId === SISIP_TRAFO_SHEET_GID ||
+          normalizeTrafoTabTitle(s.title) === 'MANAJEMEN TRAFO' ||
+          normalizeTrafoTabTitle(s.title) === 'SISIP TRAFO'
+      );
+      inspected.push({ id, meta: checkMeta, hasTrafoTab });
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  const prioritizedTargets = inspected.some((x) => x.hasTrafoTab)
+    ? inspected.filter(
+        (x) =>
+          x.hasTrafoTab ||
+          x.id === savedTrafoSheetId ||
+          x.id === preferredSpreadsheetId
+      )
+    : inspected.slice(0, 4);
+
+  let primaryMeta: SpreadsheetMetadata | null = null;
+  let syncedCount = 0;
+
+  for (const target of prioritizedTargets) {
+    try {
+      const syncedMeta = await syncTrafoRecordsToSpreadsheet(
+        accessToken,
+        target.id,
+        records
+      );
+      syncedCount++;
+      if (!primaryMeta || target.hasTrafoTab) {
+        primaryMeta = syncedMeta;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (primaryMeta) {
+    return { primaryMeta, syncedCount };
+  }
+  throw (
+    lastError ||
+    new Error(
+      'Gagal menyinkronkan data Trafo ke Google Spreadsheet MASTER GARDU / TEKNIK SINJAI.'
+    )
+  );
+}
+
 
 
 

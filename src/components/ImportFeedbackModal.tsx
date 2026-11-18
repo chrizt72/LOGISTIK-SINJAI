@@ -92,13 +92,22 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
 
         {/* Body */}
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
-          <div className="grid grid-cols-2 gap-2.5 text-center">
+          <div className="grid grid-cols-3 gap-2.5 text-center">
             <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
               <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 uppercase">
                 Jumlah Material
               </div>
               <div className="text-base sm:text-lg font-mono font-bold text-slate-900 dark:text-white mt-0.5 tabular-nums">
                 {count} Unit
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+              <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 uppercase">
+                Nama Petugas
+              </div>
+              <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white mt-1 truncate">
+                {feedback.importedRows[0]?.petugas || '-'}
               </div>
             </div>
 
@@ -168,6 +177,11 @@ export const ImportFeedbackModal: React.FC<ImportFeedbackModalProps> = ({
                     <div className="font-bold text-slate-900 dark:text-white break-all mt-0.5">
                       {row.snMaterial}
                     </div>
+                    {row.petugas && (
+                      <div className="text-[11px] font-sans text-slate-600 dark:text-slate-400 mt-0.5">
+                        Nama Petugas: <span className="font-semibold">{row.petugas}</span>
+                      </div>
+                    )}
                   </div>
                   <span
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${

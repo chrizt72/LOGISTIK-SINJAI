@@ -3,27 +3,27 @@
   "name": "SIMLOG PLN ULP Sinjai — Monitoring Material Gudang",
   "short_name": "SIMLOG PLN",
   "description": "Aplikasi monitoring stok material masuk dan keluar berbasis scan barcode Serial Number (SN) untuk Gudang Logistik PLN ULP Sinjai.",
-  "theme_color": "#0f172a",
-  "background_color": "#f8fafc",
+  "theme_color": "#0b4f6c",
+  "background_color": "#083d54",
   "display": "standalone",
   "orientation": "portrait",
   "start_url": "/",
   "scope": "/",
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-maskable-512x512.png",
+      "src": "/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

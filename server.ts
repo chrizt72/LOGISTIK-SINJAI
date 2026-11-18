@@ -12,6 +12,7 @@ import type {
   HvbRealisasiReport,
   YantekDatabaseSegment,
   YantekWorkItemInput,
+  TrafoManagementRecord,
 } from './src/types/warehouse.ts';
 import {
   parseTeknikSinjaiCsv,
@@ -65,6 +66,7 @@ interface WarehouseState {
   eksekusiMimsRows: EksekusiMimsRow[];
   yantekReports?: YantekRealisasiReport[];
   hvbReports?: HvbRealisasiReport[];
+  trafoRecords?: TrafoManagementRecord[];
   logs: ScanLogEntry[];
   counters: {
     inboundAddedCount: number;
@@ -194,6 +196,31 @@ function formatNowTimestamp(): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 }
 
+const SHEETS_EPOCH_UTC_MS = Date.UTC(1899, 11, 30, 0, 0, 0);
+
+function normalizeSerialDateTime(raw: unknown): string {
+  const cleaned = String(raw ?? '')
+    .trim()
+    .replace(/^'+/, '');
+  if (!cleaned) return '';
+  if (/^\d{5}(?:[.,]\d+)?$/.test(cleaned)) {
+    const normalizedNumStr = cleaned.replace(',', '.');
+    const serial = Number(normalizedNumStr);
+    if (Number.isFinite(serial) && serial >= 35000 && serial <= 75000) {
+      const totalSeconds = Math.round(serial * 86400);
+      const dt = new Date(SHEETS_EPOCH_UTC_MS + totalSeconds * 1000);
+      const yyyy = dt.getUTCFullYear();
+      const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getUTCDate()).padStart(2, '0');
+      const hh = String(dt.getUTCHours()).padStart(2, '0');
+      const min = String(dt.getUTCMinutes()).padStart(2, '0');
+      const ss = String(dt.getUTCSeconds()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+    }
+  }
+  return cleaned;
+}
+
 function detectMaterialFromSN(sn: string): MaterialCatalogItem {
   const cleaned = String(sn || '').trim().toUpperCase();
   for (const item of MATERIAL_CATALOG) {
@@ -220,7 +247,7 @@ function parseInitialCsv(): MaterialRow[] {
 
     rows.push({
       rowNumber: i + 1,
-      tanggalHistory: (parts[0] || '').trim(),
+      tanggalHistory: normalizeSerialDateTime(parts[0]),
       snMaterial: (parts[1] || '').trim(),
       noMaterial: (parts[2] || '').trim(),
       spesifikasi: (parts[3] || '').trim(),
@@ -376,9 +403,6 @@ function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
 }
 
 function saveState(state: WarehouseState): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
   if (!Array.isArray(state.eksekusiMimsRows)) {
     state.eksekusiMimsRows = [];
   }
@@ -404,15 +428,22 @@ function saveState(state: WarehouseState): void {
     state.sheetConfig.mimsSheetName = 'MATERIAL_KELUAR';
   }
   state.sheetConfig.mimsGid = '164626621';
-  fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf8');
-  const csvContent = buildCsvContent(state.rows);
-  fs.writeFileSync(EXPORT_CSV_PATH, csvContent, 'utf8');
-  const mimsCsvContent = buildMimsCsvContent(state.eksekusiMimsRows);
-  fs.writeFileSync(EXPORT_MIMS_CSV_PATH, mimsCsvContent, 'utf8');
-  const yantekCsvContent = buildYantekCsvContent(state.yantekReports);
-  fs.writeFileSync(EXPORT_YANTEK_CSV_PATH, yantekCsvContent, 'utf8');
-  const hvbCsvContent = buildHvbCsvContent(state.hvbReports);
-  fs.writeFileSync(EXPORT_HVB_CSV_PATH, hvbCsvContent, 'utf8');
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf8');
+    const csvContent = buildCsvContent(state.rows);
+    fs.writeFileSync(EXPORT_CSV_PATH, csvContent, 'utf8');
+    const mimsCsvContent = buildMimsCsvContent(state.eksekusiMimsRows);
+    fs.writeFileSync(EXPORT_MIMS_CSV_PATH, mimsCsvContent, 'utf8');
+    const yantekCsvContent = buildYantekCsvContent(state.yantekReports);
+    fs.writeFileSync(EXPORT_YANTEK_CSV_PATH, yantekCsvContent, 'utf8');
+    const hvbCsvContent = buildHvbCsvContent(state.hvbReports);
+    fs.writeFileSync(EXPORT_HVB_CSV_PATH, hvbCsvContent, 'utf8');
+  } catch (err) {
+    console.warn('Warning: gagal menulis file state ke disk, tetap melanjutkan dengan memori:', err);
+  }
 }
 
 function createCleanWarehouseState(): WarehouseState {
@@ -911,6 +942,83 @@ async function startServer() {
     res.send(csvData);
   });
 
+  app.get('/api/trafo/records', (_req, res) => {
+    res.json({
+      success: true,
+      records: Array.isArray(warehouseState.trafoRecords) ? warehouseState.trafoRecords : [],
+    });
+  });
+
+  app.post('/api/trafo/records', (req, res) => {
+    const payload = (req.body || {}) as Partial<TrafoManagementRecord>;
+    if (!payload.garduId || !payload.namaGardu) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID Gardu dan Nama Gardu wajib diisi.',
+      });
+    }
+    if (!Array.isArray(warehouseState.trafoRecords)) {
+      warehouseState.trafoRecords = [];
+    }
+
+    const recordId = String(payload.id || `TRF-${Date.now()}`);
+    const existingIdx = warehouseState.trafoRecords.findIndex((r) => r.id === recordId);
+
+    const newRecord: TrafoManagementRecord = {
+      id: recordId,
+      nomorLaporan: String(payload.nomorLaporan || `BA-TRF-${Date.now().toString().slice(-4)}`),
+      tanggal: String(payload.tanggal || new Date().toISOString().slice(0, 10)),
+      timestampLaporan: String(payload.timestampLaporan || formatNowTimestamp()),
+      jenisPekerjaan: payload.jenisPekerjaan === 'SISIP' ? 'SISIP' : 'MUTASI',
+      sumberMenu: payload.sumberMenu === 'HVB' ? 'HVB' : 'YANTEK',
+      unitPelaksana: String(payload.unitPelaksana || 'ULP SINJAI'),
+      garduId: String(payload.garduId).trim(),
+      namaGardu: String(payload.namaGardu).trim(),
+      penyulang: String(payload.penyulang || '-').trim(),
+      lokasi: String(payload.lokasi || '-').trim(),
+      koordinat: payload.koordinat || { lat: -5.1264, lng: 120.1518 },
+      alasanPenggantian: String(payload.alasanPenggantian || '-').trim(),
+      trafoLama: payload.trafoLama!,
+      trafoBaru: payload.trafoBaru!,
+      namaPengawas: String(payload.namaPengawas || '-').trim(),
+      nipPengawas: String(payload.nipPengawas || '-').trim(),
+      tandaTanganPengawasUrl: payload.tandaTanganPengawasUrl,
+      fotoNameplateLamaUrl: payload.fotoNameplateLamaUrl,
+      fotoNameplateBaruUrl: payload.fotoNameplateBaruUrl,
+      fotoSebelumUrl: payload.fotoSebelumUrl,
+      fotoSesudahUrl: payload.fotoSesudahUrl,
+      statusApproval: payload.statusApproval === 'SELESAI' ? 'SELESAI' : 'PENDING',
+      createdAt: String(payload.createdAt || formatNowTimestamp()),
+    };
+
+    if (existingIdx >= 0) {
+      warehouseState.trafoRecords[existingIdx] = newRecord;
+    } else {
+      warehouseState.trafoRecords.unshift(newRecord);
+    }
+    saveState(warehouseState);
+
+    return res.json({
+      success: true,
+      record: newRecord,
+      records: warehouseState.trafoRecords,
+      message: `Data ${newRecord.jenisPekerjaan === 'SISIP' ? 'Sisip Trafo' : 'Mutasi Trafo'} (${newRecord.garduId}) berhasil disimpan.`,
+    });
+  });
+
+  app.delete('/api/trafo/records/:id', (req, res) => {
+    const { id } = req.params;
+    if (!Array.isArray(warehouseState.trafoRecords)) {
+      warehouseState.trafoRecords = [];
+    }
+    warehouseState.trafoRecords = warehouseState.trafoRecords.filter((r) => r.id !== id);
+    saveState(warehouseState);
+    res.json({
+      success: true,
+      records: warehouseState.trafoRecords,
+    });
+  });
+
   app.post('/api/scan/verify', (req, res) => {
     const { snMaterial, mode, sessionScannedSNs = [], petugas = 'Petugas Gudang' } = req.body || {};
     const cleanedSN = String(snMaterial || '').trim().toUpperCase();
@@ -1057,7 +1165,7 @@ async function startServer() {
   app.post('/api/scan/inbound', (req, res) => {
     const {
       items = [],
-      petugas = 'Petugas Logistik Sinjai',
+      petugas = '',
       noDokumen = '',
       allowExistingUpdate = true,
     } = req.body || {};
@@ -1223,7 +1331,7 @@ async function startServer() {
       items = [],
       expectedCount,
       expectedNoMaterial = 'ALL',
-      petugas = 'Petugas Logistik Sinjai',
+      petugas = '',
       noDokumen = '',
       autoRegisterMissing = true,
     } = req.body || {};
@@ -1452,7 +1560,7 @@ async function startServer() {
         storLocName: row.storLocName || 'Gd ULP Sinjai',
         status: 'TERPAKAI',
         noDokumen: noDokumen || 'BON-SINJAI',
-        petugas: petugas || 'Petugas Logistik Sinjai',
+        petugas: String(petugas || '').trim() || '-',
         sourceMaterialRowNumber: row.rowNumber,
       };
       warehouseState.eksekusiMimsRows.push(newMimsRow);
@@ -1561,7 +1669,7 @@ async function startServer() {
                 const status = normalizeStatus(parts[14]);
                 importedRows.push({
                   rowNumber: i + 1,
-                  tanggalHistory: (parts[0] || '').trim(),
+                  tanggalHistory: normalizeSerialDateTime(parts[0]),
                   snMaterial: (parts[1] || '').trim(),
                   noMaterial: (parts[2] || '').trim(),
                   spesifikasi: (parts[3] || '').trim(),
@@ -1634,6 +1742,7 @@ async function startServer() {
 
     warehouseState.rows = importedRows.map((r: MaterialRow, idx: number) => ({
       ...r,
+      tanggalHistory: normalizeSerialDateTime(r.tanggalHistory),
       rowNumber: idx + 2,
       status: normalizeStatus(r.status),
     }));
@@ -1696,7 +1805,10 @@ async function startServer() {
   const distPath = path.resolve(__dirname, 'dist');
   const isProd =
     process.env.NODE_ENV === 'production' ||
-    process.env.npm_lifecycle_event === 'start';
+    process.env.npm_lifecycle_event === 'start' ||
+    (process.env.npm_lifecycle_event !== 'dev' &&
+      process.env.DISABLE_HMR !== 'true' &&
+      fs.existsSync(path.join(distPath, 'index.html')));
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

@@ -56,6 +56,11 @@ export default defineConfig(() => {
         workbox: {
           maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,csv}'],
+          globIgnores: [
+            'assets/aistudio/image_*.png',
+            'assets/aistudio/Paste_*',
+            'assets/aistudio/MASTER_GARDU_*',
+          ],
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
@@ -119,8 +124,9 @@ export default defineConfig(() => {
           if (error) {
             return;
           }
-          const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
+          const baseDir = import.meta.dirname || process.cwd();
+          const distDir = path.resolve(baseDir, 'dist');
+          const srcAssets = path.resolve(baseDir, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
@@ -130,7 +136,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname || process.cwd(), '.'),
       },
     },
     server: {

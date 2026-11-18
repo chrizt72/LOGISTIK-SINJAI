@@ -6,6 +6,12 @@
     --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-sans: 'Public Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --brand-teal-deep: #083d54;
+    --brand-teal: #0b4f6c;
+    --brand-teal-mid: #126b82;
+    --brand-teal-light: #2c96ab;
+    --brand-orange: #ea580c;
+    --brand-gold: #facc15;
   }
 
   body {

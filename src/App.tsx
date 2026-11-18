@@ -81,8 +81,10 @@ import {
   SpreadsheetMetadata,
   extractSpreadsheetId,
   listDriveSpreadsheets,
+  findAllLogistikSinjaiSpreadsheets,
   findLogistikSinjaiSpreadsheet,
   isTeknikSpreadsheetTitle,
+  normalizeSpreadsheetDateTime,
   readMaterialRowsFromGoogleSheet,
   createNewWarehouseGoogleSheet,
   initializeAndFormatEmptySpreadsheet,
@@ -235,7 +237,7 @@ export default function App() {
   }, [selectedSheetTab]);
 
   // Officer & Document info
-  const [petugas, setPetugas] = useState<string>('Petugas Gudang ULP Sinjai');
+  const [petugas, setPetugas] = useState<string>('');
   const [noDokumen, setNoDokumen] = useState<string>('BON-SINJAI-2026-01');
 
   // Outbound (Material Keluar) State & Kolom List Siap Import
@@ -465,50 +467,61 @@ export default function App() {
     }
   }, [accessToken, needsAuth, isLoading, hvbReports, yantekReports]);
 
-  // Auto-discover and format empty LOGISTIK_SINJAI spreadsheet ONLY when user is inside Menu Logistik
+  // Auto-discover, format, and repair date columns in LOGISTIK SINJAI spreadsheet when accessToken is active
   const formattedSpreadsheetIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!accessToken || needsAuth || isLoginPageOpen || selectedModule !== 'logistik') return;
+    if (!accessToken || needsAuth) return;
 
     const autoFormatTargetSpreadsheet = async () => {
       try {
-        let targetId =
-          connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)
-            ? connectedSheet.spreadsheetId
-            : '';
-
-        if (!targetId && !isTeknikSpreadsheetTitle(sheetConfig.spreadsheetName || '')) {
-          targetId = extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+        const candidateIds: string[] = [];
+        if (connectedSheet && !isTeknikSpreadsheetTitle(connectedSheet.title)) {
+          candidateIds.push(connectedSheet.spreadsheetId);
         }
-
-        if (!targetId) {
-          const driveFiles = await listDriveSpreadsheets(accessToken).catch(() => []);
-          const matchedSinjai = findLogistikSinjaiSpreadsheet(driveFiles);
-          if (matchedSinjai) {
-            targetId = matchedSinjai.id;
+        if (!isTeknikSpreadsheetTitle(sheetConfig.spreadsheetName || '')) {
+          const cfgId = extractSpreadsheetId(sheetConfig.googleSheetUrl || '');
+          if (cfgId && !candidateIds.includes(cfgId)) {
+            candidateIds.push(cfgId);
           }
         }
 
-        if (targetId && !formattedSpreadsheetIdsRef.current.has(targetId)) {
-          formattedSpreadsheetIdsRef.current.add(targetId);
-          const formattedMeta = await initializeAndFormatEmptySpreadsheet(
-            accessToken,
-            targetId,
-            rows,
-            eksekusiMimsRows
-          );
-          if (isTeknikSpreadsheetTitle(formattedMeta.title)) {
-            return;
+        const driveFiles = await listDriveSpreadsheets(accessToken).catch(() => []);
+        const matchedLogistikFiles = findAllLogistikSinjaiSpreadsheets(driveFiles);
+        for (const f of matchedLogistikFiles.slice(0, 3)) {
+          if (!candidateIds.includes(f.id)) {
+            candidateIds.push(f.id);
           }
-          setConnectedSheet(formattedMeta);
+        }
+
+        let primaryFormattedMeta: SpreadsheetMetadata | null = null;
+        for (const id of candidateIds) {
+          if (formattedSpreadsheetIdsRef.current.has(id)) continue;
+          formattedSpreadsheetIdsRef.current.add(id);
+          try {
+            const formattedMeta = await initializeAndFormatEmptySpreadsheet(
+              accessToken,
+              id,
+              rows,
+              eksekusiMimsRows
+            );
+            if (!isTeknikSpreadsheetTitle(formattedMeta.title) && !primaryFormattedMeta) {
+              primaryFormattedMeta = formattedMeta;
+            }
+          } catch {
+            formattedSpreadsheetIdsRef.current.delete(id);
+          }
+        }
+
+        if (primaryFormattedMeta) {
+          setConnectedSheet(primaryFormattedMeta);
           setSelectedSheetTab('MATERIAL_MASUK');
           setSheetConfig((prev) => ({
             ...prev,
-            spreadsheetName: formattedMeta.title,
+            spreadsheetName: primaryFormattedMeta!.title,
             sheetName: 'MATERIAL_MASUK',
             mimsSheetName: 'MATERIAL_KELUAR',
-            googleSheetUrl: formattedMeta.spreadsheetUrl,
+            googleSheetUrl: primaryFormattedMeta!.spreadsheetUrl,
           }));
         }
       } catch (err) {
@@ -1557,7 +1570,7 @@ export default function App() {
           storLocName: row.storLocName,
           status: 'TERPAKAI',
           noDokumen: noDokumen || 'BON-SINJAI',
-          petugas: petugas || 'Petugas Logistik Sinjai',
+          petugas: petugas.trim() || '-',
           sourceMaterialRowNumber: row.rowNumber,
         }));
         const updatedSnMap = new Map(importedList.map((r) => [r.snMaterial.toUpperCase(), r]));
@@ -1578,6 +1591,7 @@ export default function App() {
       setRows(nextRows);
       setEksekusiMimsRows(nextMims);
       setOutboundReadyList([]);
+      setPetugas('');
       setQrPopupState((prev) => ({ ...prev, isOpen: false, items: [] }));
       setCurrentPage(1);
 
@@ -1708,6 +1722,7 @@ export default function App() {
       triggerSound('commit');
       setRows(nextRows);
       setInboundReadyList([]);
+      setPetugas('');
       setQrPopupState((prev) => ({ ...prev, isOpen: false, items: [] }));
       setCurrentPage(1);
 
@@ -1866,17 +1881,22 @@ export default function App() {
     };
 
     return (
-      <div className="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 px-4 py-8">
-        <div className="w-full max-w-md mx-auto my-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+      <div className="min-h-screen flex flex-col justify-between bg-gradient-to-b from-[#083d54] via-[#126b82] to-[#2c96ab] text-slate-900 dark:text-slate-100 px-4 py-8">
+        <div className="w-full max-w-md mx-auto my-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-[#04212e]/45 space-y-6">
           {/* Brand Header */}
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
-              <Package className="w-7 h-7" />
+          <div className="text-center space-y-2.5">
+            <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full mx-auto p-0.5 bg-gradient-to-br from-[#facc15] via-[#0b4f6c] to-[#ea580c] shadow-lg shadow-[#083d54]/30">
+              <img
+                src="/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png"
+                alt="Logo PLN UP3 Bulukumba"
+                referrerPolicy="no-referrer"
+                className="w-full h-full rounded-full object-cover bg-[#083d54]"
+              />
             </div>
-            <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">
-              PLN ULP Sinjai
+            <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-[#0b4f6c] dark:text-[#facc15]">
+              PLN UP3 Bulukumba · ULP Sinjai
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white font-display">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#083d54] dark:text-white font-display">
               SINJAI BENDERANG
             </h1>
           </div>
@@ -1887,7 +1907,7 @@ export default function App() {
               className={`p-3 rounded-xl border text-xs flex items-start justify-between gap-2 ${
                 inlineBanner.type === 'error'
                   ? 'bg-red-50 dark:bg-red-950/50 border-red-200 dark:border-red-800 text-red-900 dark:text-red-200'
-                  : 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+                  : 'bg-cyan-50 dark:bg-cyan-950/50 border-cyan-200 dark:border-cyan-800 text-cyan-950 dark:text-cyan-100'
               }`}
             >
               <div>
@@ -1911,8 +1931,8 @@ export default function App() {
             </div>
 
             {googleUser && accessToken && !needsAuth ? (
-              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 space-y-2.5 text-center">
-                <div className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
+              <div className="p-3.5 rounded-2xl bg-cyan-50 dark:bg-cyan-950/40 border border-cyan-200 dark:border-cyan-800 space-y-2.5 text-center">
+                <div className="text-xs font-semibold text-[#083d54] dark:text-cyan-200">
                   Terhubung sebagai:{' '}
                   <span className="font-mono font-bold">{googleUser.email}</span>
                 </div>
@@ -1974,7 +1994,7 @@ export default function App() {
                   type="button"
                   onClick={handleDirectGisLogin}
                   disabled={isSigningIn}
-                  className="w-full min-h-[42px] px-4 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl transition-colors"
+                  className="w-full min-h-[42px] px-4 py-2 text-xs font-semibold text-[#0b4f6c] dark:text-cyan-300 bg-cyan-50 hover:bg-cyan-100 dark:bg-cyan-950/60 border border-cyan-200 dark:border-cyan-800 rounded-xl transition-colors"
                 >
                   Login Google Mobile
                 </button>
@@ -1985,33 +2005,33 @@ export default function App() {
           <div className="relative flex py-1 items-center">
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
             <span className="flex-shrink mx-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-              Pilih Menu Aplikasi
+              Pilih Layanan
             </span>
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
           </div>
 
-          {/* 3 Tombol Menu Terpisah di Bawah Kolom Login Google */}
+          {/* 3 Tombol Halaman Depan Tanpa Tulisan "Menu" */}
           <div className="space-y-2.5">
             <button
               type="button"
               onClick={() => handleEnterModule('logistik')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <Package className="w-5 h-5 shrink-0" />
-                <div className="text-sm font-bold leading-tight">Menu Logistik</div>
+                <Package className="w-5 h-5 text-[#facc15] shrink-0" />
+                <div className="text-sm font-bold leading-tight">Logistik</div>
               </div>
-              <LogIn className="w-4 h-4 shrink-0" />
+              <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
             </button>
 
             <button
               type="button"
               onClick={() => handleEnterModule('yantek')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-sky-700 hover:bg-sky-800 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#ea580c] hover:bg-[#c2410c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <Wrench className="w-5 h-5 shrink-0" />
-                <div className="text-sm font-bold leading-tight">Menu Yantek</div>
+                <Wrench className="w-5 h-5 text-white shrink-0" />
+                <div className="text-sm font-bold leading-tight">Realisasi Yantek</div>
               </div>
               <LogIn className="w-4 h-4 shrink-0" />
             </button>
@@ -2019,13 +2039,13 @@ export default function App() {
             <button
               type="button"
               onClick={() => handleEnterModule('hvb')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#126b82] hover:bg-[#0b4f6c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <ClipboardCheck className="w-5 h-5 shrink-0" />
-                <div className="text-sm font-bold leading-tight">Menu Realisasi HVB</div>
+                <ClipboardCheck className="w-5 h-5 text-[#facc15] shrink-0" />
+                <div className="text-sm font-bold leading-tight">Realisasi HVB</div>
               </div>
-              <LogIn className="w-4 h-4 shrink-0" />
+              <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
             </button>
           </div>
         </div>
@@ -2034,13 +2054,13 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <div className="min-h-screen flex flex-col bg-[#f2f7f9] dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* =====================================================================
           TOP BAR CONTRACT: 3 Zones separated by gap-8
           Setiap Menu Dipisah sesuai pilihan dari Halaman Login
       ====================================================================== */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 h-13 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
-        {/* Zone 1: Single text element wordmark */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 h-14 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-cyan-900/15 dark:border-cyan-800/40">
+        {/* Zone 1: Brand mark with logo */}
         <a
           href="#top"
           onClick={(e) => {
@@ -2053,9 +2073,15 @@ export default function App() {
               setActiveSection('hvb');
             }
           }}
-          className="text-sm sm:text-base font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0 font-display"
+          className="flex items-center gap-2.5 text-sm sm:text-base font-bold tracking-tight text-[#083d54] dark:text-white whitespace-nowrap shrink-0 font-display"
         >
-          SINJAI BENDERANG
+          <img
+            src="/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png"
+            alt="PLN UP3 Bulukumba"
+            referrerPolicy="no-referrer"
+            className="w-8 h-8 rounded-full object-cover ring-1 ring-[#facc15] bg-[#083d54] shrink-0"
+          />
+          <span>SINJAI BENDERANG</span>
         </a>
 
         {/* Zone 2: Navigation strictly scoped to selectedModule */}
@@ -2067,8 +2093,8 @@ export default function App() {
                 onClick={() => setActiveSection('masuk')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                   activeSection === 'masuk'
-                    ? 'border-emerald-600 text-slate-900 dark:text-white font-semibold'
-                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                    ? 'border-[#0b4f6c] dark:border-[#facc15] text-[#083d54] dark:text-white font-semibold'
+                    : 'border-transparent hover:text-[#083d54] dark:hover:text-slate-200'
                 }`}
               >
                 Masuk
@@ -2078,8 +2104,8 @@ export default function App() {
                 onClick={() => setActiveSection('keluar')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                   activeSection === 'keluar'
-                    ? 'border-amber-600 text-slate-900 dark:text-white font-semibold'
-                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                    ? 'border-[#ea580c] text-[#ea580c] dark:text-orange-400 font-semibold'
+                    : 'border-transparent hover:text-[#083d54] dark:hover:text-slate-200'
                 }`}
               >
                 Keluar
@@ -2089,8 +2115,8 @@ export default function App() {
                 onClick={() => setActiveSection('rekap')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                   activeSection === 'rekap' || activeSection === 'spreadsheet'
-                    ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
-                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                    ? 'border-[#126b82] text-[#083d54] dark:text-white font-semibold'
+                    : 'border-transparent hover:text-[#083d54] dark:hover:text-slate-200'
                 }`}
               >
                 Rekap Stok
@@ -2100,8 +2126,8 @@ export default function App() {
                 onClick={() => setActiveSection('riwayat')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                   activeSection === 'riwayat'
-                    ? 'border-sky-600 text-slate-900 dark:text-white font-semibold'
-                    : 'border-transparent hover:text-slate-900 dark:hover:text-slate-200'
+                    ? 'border-[#0b4f6c] text-[#083d54] dark:text-white font-semibold'
+                    : 'border-transparent hover:text-[#083d54] dark:hover:text-slate-200'
                 }`}
               >
                 Riwayat
@@ -2113,7 +2139,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('yantek')}
-              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-sky-600 text-slate-900 dark:text-white font-semibold"
+              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-[#ea580c] text-[#083d54] dark:text-white font-semibold"
             >
               Realisasi Yantek
             </button>
@@ -2123,7 +2149,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('hvb')}
-              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-emerald-600 text-slate-900 dark:text-white font-semibold"
+              className="py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 border-[#0b4f6c] text-[#083d54] dark:text-white font-semibold"
             >
               Realisasi HAR Volume Based
             </button>
@@ -2136,7 +2162,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsSyncModalOpen(true)}
-              className="min-h-[38px] sm:min-h-[40px] px-3 sm:px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 dark:hover:bg-sky-500 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[38px] sm:min-h-[40px] px-3 sm:px-4 py-1.5 text-xs font-semibold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl transition-colors whitespace-nowrap shrink-0"
             >
               Sinkronisasi Sheet
             </button>
@@ -2144,11 +2170,11 @@ export default function App() {
           <button
             type="button"
             onClick={() => setIsLoginPageOpen(true)}
-            className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
-            title="Kembali ke Halaman Login & Pilih Menu"
+            className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-[#083d54] dark:text-slate-200 bg-cyan-50 hover:bg-cyan-100 dark:bg-slate-800 border border-cyan-200/80 dark:border-slate-700 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            title="Kembali ke Halaman Depan & Login"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Pilih Menu / Login</span>
+            <span>Halaman Depan</span>
           </button>
         </div>
       </header>
@@ -2450,7 +2476,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsCameraOpen(true)}
-                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
+                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-[#ea580c] hover:bg-[#c2410c] active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
                 >
                   <Camera className="w-5 h-5" />
                   <span>
@@ -2513,20 +2539,17 @@ export default function App() {
               )}
 
               {/* Officer & Bon Number */}
-              <div
-                className={`${
-                  showMobileMetaForm ? 'grid' : 'hidden sm:grid'
-                } grid-cols-1 sm:grid-cols-2 gap-3 pt-1`}
-              >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Nama Petugas
                   </label>
                   <input
                     type="text"
                     value={petugas}
                     onChange={(e) => setPetugas(e.target.value)}
-                    className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl"
+                    placeholder="Masukkan nama petugas..."
+                    className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
                   />
                 </div>
                 <div>
@@ -2613,6 +2636,20 @@ export default function App() {
                   </div>
                 ) : (
                   <>
+                    {/* Kolom Input Nama Petugas Setelah Scan / Input Manual Material Keluar */}
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/80">
+                      <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 mb-1.5">
+                        Nama Petugas
+                      </label>
+                      <input
+                        type="text"
+                        value={petugas}
+                        onChange={(e) => setPetugas(e.target.value)}
+                        placeholder="Masukkan nama petugas..."
+                        className="w-full min-h-[42px] px-3.5 py-2 text-xs sm:text-sm font-medium bg-white dark:bg-slate-950 border border-amber-300 dark:border-amber-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+
                     {/* Mobile Cards */}
                     <div className="md:hidden space-y-2 max-h-[380px] overflow-y-auto pr-1">
                       {outboundReadyList.map((item, idx) => (
@@ -2631,6 +2668,9 @@ export default function App() {
                             </div>
                             <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
                               {item.noMaterial} · {item.spesifikasi}
+                            </div>
+                            <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                              Nama Petugas: <span className="font-bold">{petugas || '-'}</span>
                             </div>
                             <div className="text-[11px] font-mono font-bold text-amber-700 dark:text-amber-400">
                               TERPAKAI
@@ -2664,6 +2704,7 @@ export default function App() {
                             <th className="py-2.5 px-3">No</th>
                             <th className="py-2.5 px-3">SN Material</th>
                             <th className="py-2.5 px-3">Material &amp; Spesifikasi</th>
+                            <th className="py-2.5 px-3">Nama Petugas</th>
                             <th className="py-2.5 px-3">Status</th>
                             <th className="py-2.5 px-3 text-right">Hapus</th>
                           </tr>
@@ -2683,6 +2724,9 @@ export default function App() {
                               <td className="py-2 px-3">
                                 <span className="font-mono font-semibold">{item.noMaterial}</span> ·{' '}
                                 <span className="text-slate-500">{item.spesifikasi}</span>
+                              </td>
+                              <td className="py-2 px-3 font-medium text-slate-800 dark:text-slate-200">
+                                {petugas || '-'}
                               </td>
                               <td className="py-2 px-3 font-mono text-[11px] font-bold text-amber-700 dark:text-amber-400 whitespace-nowrap">
                                 TERPAKAI
@@ -2866,9 +2910,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsCameraOpen(true)}
-                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
+                  className="w-full min-h-[48px] px-4 py-3 text-sm font-bold text-white bg-[#0b4f6c] hover:bg-[#083d54] active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-xs"
                 >
-                  <Camera className="w-5 h-5" />
+                  <Camera className="w-5 h-5 text-[#facc15]" />
                   <span>
                     {inboundReadyList.length > 0
                       ? `+ Scan Material (${inboundReadyList.length})`
@@ -2927,6 +2971,20 @@ export default function App() {
                   </button>
                 </div>
               )}
+
+              {/* Kolom Nama Petugas pada Sub Menu Material Masuk (Scan & Manual) */}
+              <div className="pt-1">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Nama Petugas
+                </label>
+                <input
+                  type="text"
+                  value={petugas}
+                  onChange={(e) => setPetugas(e.target.value)}
+                  placeholder="Masukkan nama petugas..."
+                  className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                />
+              </div>
             </div>
 
             {/* Right Column: DAFTAR MATERIAL MASUK */}
@@ -2999,6 +3057,20 @@ export default function App() {
                   </div>
                 ) : (
                   <>
+                    {/* Kolom Input Nama Petugas Setelah Scan / Input Manual Material Masuk */}
+                    <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/80">
+                      <label className="block text-xs font-bold text-emerald-900 dark:text-emerald-300 mb-1.5">
+                        Nama Petugas
+                      </label>
+                      <input
+                        type="text"
+                        value={petugas}
+                        onChange={(e) => setPetugas(e.target.value)}
+                        placeholder="Masukkan nama petugas..."
+                        className="w-full min-h-[42px] px-3.5 py-2 text-xs sm:text-sm font-medium bg-white dark:bg-slate-950 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
                     {/* Mobile Cards */}
                     <div className="md:hidden space-y-2 max-h-[380px] overflow-y-auto pr-1">
                       {inboundReadyList.map((item, idx) => (
@@ -3017,6 +3089,9 @@ export default function App() {
                             </div>
                             <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
                               {item.noMaterial} · Batch {item.noBatch} · {item.spesifikasi}
+                            </div>
+                            <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                              Nama Petugas: <span className="font-bold">{petugas || '-'}</span>
                             </div>
                             <div className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
                               STOK SIAP
@@ -3050,6 +3125,7 @@ export default function App() {
                             <th className="py-2.5 px-3">No</th>
                             <th className="py-2.5 px-3">SN Material</th>
                             <th className="py-2.5 px-3">Spesifikasi &amp; Batch</th>
+                            <th className="py-2.5 px-3">Nama Petugas</th>
                             <th className="py-2.5 px-3">Status</th>
                             <th className="py-2.5 px-3 text-right">Hapus</th>
                           </tr>
@@ -3070,6 +3146,9 @@ export default function App() {
                                 <span className="font-mono font-semibold">{item.noMaterial}</span> ·
                                 Batch {item.noBatch} ·{' '}
                                 <span className="text-slate-500">{item.spesifikasi}</span>
+                              </td>
+                              <td className="py-2 px-3 font-medium text-slate-800 dark:text-slate-200">
+                                {petugas || '-'}
                               </td>
                               <td className="py-2 px-3 font-mono font-bold text-emerald-700 dark:text-emerald-400">
                                 STOK SIAP
@@ -3440,11 +3519,17 @@ export default function App() {
                               Batch <span className="font-mono">{m.noBatch}</span> ·{' '}
                               <span className="font-mono text-[11px]">{m.spesifikasi}</span>
                             </div>
-                            <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/50 text-[11px] font-mono">
+                            <div className="grid grid-cols-3 gap-2 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/50 text-[11px] font-mono">
                               <div>
                                 <span className="text-slate-500 block">Status:</span>
                                 <span className="font-bold text-amber-700 dark:text-amber-400">
                                   {m.status}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500 block">Nama Petugas:</span>
+                                <span className="font-bold text-slate-800 dark:text-slate-200">
+                                  {m.petugas || '-'}
                                 </span>
                               </div>
                               <div>
@@ -3685,6 +3770,12 @@ export default function App() {
                                 Batch <span className="font-mono">{row.noBatch}</span> ·{' '}
                                 <span className="font-mono text-[11px]">{row.spesifikasi}</span>
                               </div>
+                              <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                                Nama Petugas:{' '}
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                  {row.petugas || '-'}
+                                </span>
+                              </div>
                             </div>
 
                             {/* Bottom Touch Action Buttons (44px min height) */}
@@ -3730,6 +3821,7 @@ export default function App() {
                             <th className="py-2.5 px-2.5">D · SPESIFIKASI</th>
                             <th className="py-2.5 px-2.5">E · STATUS TRANSAKSI</th>
                             <th className="py-2.5 px-2.5">G · BATCH</th>
+                            <th className="py-2.5 px-2.5">H · NAMA PETUGAS</th>
                             <th className="py-2.5 px-2.5">M/N · UNIT GUDANG</th>
                             <th className="py-2.5 px-2.5">KETERANGAN / STATUS</th>
                             <th className="py-2.5 px-2.5 text-right">Aksi Scan QR</th>
@@ -3785,6 +3877,9 @@ export default function App() {
                                 </td>
                                 <td className="py-2 px-2.5 font-mono tabular-nums text-slate-600 dark:text-slate-400">
                                   {row.noBatch}
+                                </td>
+                                <td className="py-2 px-2.5 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                                  {row.petugas || '-'}
                                 </td>
                                 <td className="py-2 px-2.5 text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
                                   {row.unit} · {row.storLocName}
@@ -4165,8 +4260,8 @@ export default function App() {
               }
               className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl font-bold shadow-2xs ${
                 selectedModule === 'yantek'
-                  ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
-                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                  ? 'bg-orange-50 dark:bg-orange-950/60 text-[#ea580c] dark:text-orange-300'
+                  : 'bg-cyan-50 dark:bg-cyan-950/60 text-[#0b4f6c] dark:text-cyan-300'
               }`}
             >
               {selectedModule === 'yantek' ? (
@@ -4182,11 +4277,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsLoginPageOpen(true)}
-              className="min-h-[46px] flex flex-col items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all"
+              className="min-h-[46px] flex flex-col items-center justify-center rounded-xl text-[#083d54] dark:text-slate-300 hover:bg-cyan-50/70 dark:hover:text-white transition-all"
             >
               <LogOut className="w-5 h-5" />
               <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
-                Pilih Menu / Login
+                Halaman Depan
               </span>
             </button>
           </nav>
@@ -4273,9 +4368,9 @@ export default function App() {
           LOADING OVERLAY SAAT PENGIRIMAN DATA LOGISTIK
       ====================================================================== */}
       {(isProcessingInbound || isProcessingOutbound) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs">
-          <div className="w-20 h-20 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl flex items-center justify-center">
-            <RefreshCw className="w-10 h-10 text-emerald-600 dark:text-emerald-400 animate-spin" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#083d54]/60 backdrop-blur-xs">
+          <div className="w-20 h-20 rounded-2xl bg-white dark:bg-slate-900 border border-cyan-200 dark:border-cyan-800 shadow-2xl flex items-center justify-center">
+            <RefreshCw className="w-10 h-10 text-[#0b4f6c] dark:text-[#facc15] animate-spin" />
           </div>
         </div>
       )}
@@ -4312,6 +4407,8 @@ export default function App() {
         isImporting={
           qrPopupState.mode === 'MASUK' ? isProcessingInbound : isProcessingOutbound
         }
+        petugas={petugas}
+        onChangePetugas={setPetugas}
         onClose={() => setQrPopupState((prev) => ({ ...prev, isOpen: false }))}
         onSwitchMode={handleSwitchPopupMode}
         onScanMoreCamera={() => {

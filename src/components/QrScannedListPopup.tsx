@@ -34,6 +34,8 @@ interface QrScannedListPopupProps {
   latestScannedItems: ScannedSnItemPreview[];
   totalReadyInColumn: number;
   isImporting: boolean;
+  petugas: string;
+  onChangePetugas: (value: string) => void;
   onClose: () => void;
   onSwitchMode: (newMode: 'MASUK' | 'KELUAR') => void;
   onScanMoreCamera: () => void;
@@ -47,6 +49,8 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
   latestScannedItems,
   totalReadyInColumn,
   isImporting,
+  petugas,
+  onChangePetugas,
   onClose,
   onScanMoreCamera,
   onRemoveItem,
@@ -107,7 +111,7 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
           </button>
         </div>
 
-        {/* Body: List SN yang Terscan */}
+        {/* Body: List SN yang Terscan & Kolom Nama Petugas */}
         <div className="p-4 sm:p-5 space-y-3 overflow-y-auto flex-1">
           {alreadyTerpakaiItems.length > 0 && mode === 'KELUAR' && (
             <div className="p-3 rounded-xl bg-red-50/90 dark:bg-red-950/40 border border-red-200 dark:border-red-800 flex items-start gap-2.5 text-xs text-red-900 dark:text-red-200">
@@ -119,6 +123,20 @@ export const QrScannedListPopup: React.FC<QrScannedListPopupProps> = ({
               </div>
             </div>
           )}
+
+          {/* Kolom Nama Petugas setelah melakukan Scan */}
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-1.5">
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-200">
+              Nama Petugas <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={petugas}
+              onChange={(e) => onChangePetugas(e.target.value)}
+              placeholder="Masukkan Nama Petugas..."
+              className="w-full min-h-[42px] px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          </div>
 
           <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
             <span>Daftar SN Material Hasil Scan:</span>
