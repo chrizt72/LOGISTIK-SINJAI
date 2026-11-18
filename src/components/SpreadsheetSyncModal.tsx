@@ -27,8 +27,12 @@ import {
   getSpreadsheetMetadata,
   initializeAndFormatEmptySpreadsheet,
   isTeknikSpreadsheetTitle,
+  detectBrowserEnvironment,
   FIREBASE_PROJECT_ID,
+  OAUTH_CLIENT_ID,
   FIREBASE_AUTH_DOMAINS_URL,
+  GCP_OAUTH_CLIENTS_URL,
+  GCP_OAUTH_CONSENT_AUDIENCE_URL,
 } from '../services/googleWorkspace';
 
 interface SpreadsheetSyncModalProps {
@@ -109,8 +113,9 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
   const [showDomainHelper, setShowDomainHelper] = useState<boolean>(false);
   const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
 
-  const currentHostname =
-    typeof window !== 'undefined' ? window.location.hostname : '';
+  const browserEnv = detectBrowserEnvironment();
+  const currentHostname = browserEnv.currentHostname;
+  const currentOrigin = browserEnv.currentOrigin;
   const recommendedDomains = Array.from(
     new Set(
       [
@@ -380,28 +385,102 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
               </div>
             )}
 
-            {/* Mobile Unauthorized-Domain Diagnostic & Fix Card */}
+            {/* Mobile OAuth 2.0 Diagnostic & Fix Card */}
             {showDomainHelper && (
               <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3 text-xs">
                 <div className="flex items-start gap-2.5">
                   <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <div className="font-bold text-amber-950 dark:text-amber-100">
-                      Penyebab &amp; Cara Mengatasi Error (auth/unauthorized-domain) di Mobile:
+                      Solusi Error Kebijakan OAuth 2.0 Google / Unauthorized Domain di HP:
                     </div>
                     <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
-                      Saat membuka aplikasi dari HP menggunakan link <em>Shared App URL</em> atau{' '}
-                      <em>Dev URL</em>, domain Cloud Run harus didaftarkan ke daftar{' '}
-                      <strong>Authorized domains</strong> pada Firebase Console project{' '}
+                      Jika petugas di HP melihat pesan{' '}
+                      <em>&quot;Akses diblokir: tidak mematuhi kebijakan OAuth 2.0 Google&quot;</em>:
+                      pastikan link dibuka di <strong>Chrome/Safari</strong> (bukan browser dalam
+                      WhatsApp/Telegram), lalu daftarkan Origin &amp; Domain berikut pada project{' '}
                       <code className="font-mono font-bold">{FIREBASE_PROJECT_ID}</code>:
                     </p>
                   </div>
                 </div>
 
-                {/* Step 1: Copy Domain(s) */}
+                {browserEnv.isInAppBrowser && (
+                  <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-100 space-y-2">
+                    <div className="font-bold">
+                      Terdeteksi Browser Dalam Aplikasi ({browserEnv.inAppName})
+                    </div>
+                    <p className="text-[11px]">
+                      Google OAuth 2.0 memblokir WebView. Buka aplikasi ini di Google Chrome /
+                      Safari.
+                    </p>
+                    {browserEnv.chromeIntentUrl && (
+                      <a
+                        href={browserEnv.chromeIntentUrl}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold text-white bg-[#0b4f6c] rounded-lg"
+                      >
+                        <span>Buka di Google Chrome</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                {/* Step 1: Copy Origin for Google Cloud Credentials */}
+                {currentOrigin && (
+                  <div className="space-y-1.5">
+                    <div className="font-semibold text-slate-900 dark:text-white">
+                      1. Salin Origin URL untuk Google Cloud OAuth Client (
+                      <code className="font-mono text-[10px]">{OAUTH_CLIENT_ID}</code>):
+                    </div>
+                    <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-slate-700">
+                      <code className="font-mono text-[11px] text-slate-800 dark:text-slate-200 truncate">
+                        {currentOrigin}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyDomain(currentOrigin)}
+                        className="min-h-[32px] px-2.5 py-1 text-[11px] font-bold text-white bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 rounded-lg flex items-center gap-1 shrink-0"
+                      >
+                        {copiedDomain === currentOrigin ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Tersalin</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Salin Origin</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      <a
+                        href={GCP_OAUTH_CLIENTS_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[36px] px-3 py-1.5 text-[11px] font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <span>Authorized JavaScript Origins</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                      <a
+                        href={GCP_OAUTH_CONSENT_AUDIENCE_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[36px] px-3 py-1.5 text-[11px] font-bold text-amber-950 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <span>Publish App / Test Users</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Copy Domain(s) for Firebase Auth */}
                 <div className="space-y-1.5">
                   <div className="font-semibold text-slate-900 dark:text-white">
-                    1. Salin Domain Aplikasi Ini:
+                    2. Salin Hostname untuk Firebase Console → Authorized Domains:
                   </div>
                   <div className="space-y-1.5">
                     {recommendedDomains.map((dom) => (
@@ -432,35 +511,22 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
                       </div>
                     ))}
                   </div>
-                </div>
-
-                {/* Step 2: Open Firebase Console Authorized Domains */}
-                <div className="space-y-1.5">
-                  <div className="font-semibold text-slate-900 dark:text-white">
-                    2. Tambahkan ke Firebase Console → Authorized Domains:
-                  </div>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                    Buka tautan di bawah, gulir ke bagian <strong>Authorized domains</strong>, klik{' '}
-                    <strong>Add domain</strong>, lalu tempel domain di atas dan klik{' '}
-                    <strong>Add</strong>:
-                  </p>
                   <a
                     href={FIREBASE_AUTH_DOMAINS_URL}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full min-h-[40px] px-3.5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                    className="w-full min-h-[38px] px-3.5 py-2 text-xs font-bold text-amber-950 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl flex items-center justify-center gap-2 transition-colors"
                   >
                     <span>Buka Firebase Auth Settings ({FIREBASE_PROJECT_ID})</span>
                     <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                   </a>
                 </div>
 
-                {/* Step 3: Alternative Without Firebase Login */}
+                {/* Step 3: Alternative Without Login */}
                 <div className="pt-2 border-t border-amber-200/80 dark:border-amber-800/60 text-[11px] text-slate-700 dark:text-slate-300">
-                  <strong>Tips Tanpa Login di HP:</strong> Anda juga dapat langsung menempelkan{' '}
-                  <strong>Link Google Spreadsheet</strong> pada kolom{' '}
-                  <em>&quot;Hubungkan via Link / ID Google Spreadsheet&quot;</em> di bawah untuk
-                  menyinkronkan data tanpa perlu login Firebase Auth.
+                  <strong>Tips Petugas Lapangan:</strong> Jika Admin sudah login di laptop pada URL
+                  server yang sama, perangkat HP otomatis memakai sesi server aktif. Anda juga
+                  dapat langsung menempelkan <strong>Link Google Spreadsheet</strong> di bawah.
                 </div>
               </div>
             )}

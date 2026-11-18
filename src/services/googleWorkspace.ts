@@ -140,6 +140,7 @@ declare global {
             client_id: string;
             scope: string;
             prompt?: string;
+            ux_mode?: 'popup' | 'redirect';
             callback: (response: {
               access_token?: string;
               error?: string;
@@ -156,8 +157,131 @@ declare global {
 }
 
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0123226455';
+export const OAUTH_CLIENT_ID = firebaseConfig.oAuthClientId || '';
 export const FIREBASE_AUTH_DOMAINS_URL = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`;
 export const GCP_OAUTH_CLIENTS_URL = `https://console.cloud.google.com/apis/credentials?project=${FIREBASE_PROJECT_ID}`;
+export const GCP_OAUTH_CONSENT_AUDIENCE_URL = `https://console.cloud.google.com/auth/audience?project=${FIREBASE_PROJECT_ID}`;
+
+export interface BrowserEnvironmentInfo {
+  isMobile: boolean;
+  isAndroid: boolean;
+  isIOS: boolean;
+  isStandalonePwa: boolean;
+  isInAppBrowser: boolean;
+  inAppName: string | null;
+  currentOrigin: string;
+  currentHostname: string;
+  chromeIntentUrl: string | null;
+}
+
+export function detectBrowserEnvironment(): BrowserEnvironmentInfo {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return {
+      isMobile: false,
+      isAndroid: false,
+      isIOS: false,
+      isStandalonePwa: false,
+      isInAppBrowser: false,
+      inAppName: null,
+      currentOrigin: '',
+      currentHostname: '',
+      chromeIntentUrl: null,
+    };
+  }
+
+  const ua = navigator.userAgent || '';
+  const isAndroid = /Android/i.test(ua);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isMobile = isAndroid || isIOS || /webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const isStandalonePwa =
+    (typeof window.matchMedia === 'function' &&
+      window.matchMedia('(display-mode: standalone)').matches) ||
+    Boolean((navigator as any).standalone);
+
+  let inAppName: string | null = null;
+  if (/WhatsApp/i.test(ua)) inAppName = 'WhatsApp';
+  else if (/Telegram/i.test(ua)) inAppName = 'Telegram';
+  else if (/Instagram/i.test(ua)) inAppName = 'Instagram';
+  else if (/FBAN|FBAV|FB_IAB/i.test(ua)) inAppName = 'Facebook';
+  else if (/Line\//i.test(ua)) inAppName = 'LINE';
+  else if (/BytedanceWebview|TikTok|Musical_ly/i.test(ua)) inAppName = 'TikTok';
+  else if (/\bwv\b|; wv\)/i.test(ua)) inAppName = 'Browser Dalam Aplikasi (WebView)';
+  else if (isIOS && !isStandalonePwa && !/Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua)) {
+    inAppName = 'Browser Dalam Aplikasi (iOS WebView)';
+  }
+
+  const currentOrigin = window.location.origin || '';
+  const currentHostname = window.location.hostname || '';
+  const chromeIntentUrl =
+    isAndroid && window.location.host
+      ? `intent://${window.location.host}${window.location.pathname}${window.location.search}#Intent;scheme=https;package=com.android.chrome;end`
+      : null;
+
+  return {
+    isMobile,
+    isAndroid,
+    isIOS,
+    isStandalonePwa,
+    isInAppBrowser: Boolean(inAppName),
+    inAppName,
+    currentOrigin,
+    currentHostname,
+    chromeIntentUrl,
+  };
+}
+
+export async function refreshServerOAuthSession(): Promise<{
+  user: User;
+  accessToken: string;
+} | null> {
+  const serverSess = await fetchSessionFromServer();
+  if (!serverSess?.accessToken) {
+    return null;
+  }
+  cachedAccessToken = serverSess.accessToken;
+  cachedTokenExpiresAt = serverSess.expiresAt;
+  const resolvedUser =
+    serverSess.user ||
+    cachedFallbackUser ||
+    ({
+      uid: 'google-oauth-user',
+      email: 'Terhubung via Sesi Admin',
+      displayName: 'Petugas Google Workspace',
+      photoURL: null,
+    } as User);
+  cachedFallbackUser = resolvedUser;
+  authSuccessListeners.forEach((cb) => {
+    try {
+      cb(resolvedUser, serverSess.accessToken);
+    } catch {
+      // Ignore listener error
+    }
+  });
+  return { user: resolvedUser, accessToken: serverSess.accessToken };
+}
+
+function buildOAuthPolicyError(rawDetail?: string): Error {
+  const env = detectBrowserEnvironment();
+  if (env.isInAppBrowser) {
+    const err: any = new Error(
+      `Browser ${env.inAppName || 'WebView'} memblokir login Google (Error 403: disallowed_useragent / kebijakan OAuth 2.0 Google). Silakan ketuk "Buka di Google Chrome" atau salin link aplikasi lalu buka di Chrome/Safari.`
+    );
+    err.code = 'oauth/disallowed-webview';
+    err.currentOrigin = env.currentOrigin;
+    err.currentDomain = env.currentHostname;
+    return err;
+  }
+
+  const detailText = rawDetail ? ` (${rawDetail})` : '';
+  const err: any = new Error(
+    `Akses diblokir kebijakan OAuth 2.0 Google${detailText}. Pastikan Origin "${env.currentOrigin || env.currentHostname}" sudah didaftarkan pada Google Cloud Console → Authorized JavaScript origins & Firebase Authorized domains, serta OAuth Consent Screen sudah dipublish atau email petugas masuk daftar Test users.`
+  );
+  err.code = 'oauth/policy-blocked';
+  err.currentOrigin = env.currentOrigin;
+  err.currentDomain = env.currentHostname;
+  err.firebaseAuthUrl = FIREBASE_AUTH_DOMAINS_URL;
+  return err;
+}
 
 async function fetchGoogleUserProfile(accessToken: string): Promise<User> {
   try {
@@ -185,19 +309,25 @@ async function fetchGoogleUserProfile(accessToken: string): Promise<User> {
 }
 
 export const signInWithGoogleIdentityServices = (
-  promptMode: string = ''
+  promptMode: string = 'select_account'
 ): Promise<{
   user: User;
   accessToken: string;
 }> => {
   return new Promise((resolve, reject) => {
+    const env = detectBrowserEnvironment();
+    if (env.isInAppBrowser) {
+      reject(buildOAuthPolicyError('disallowed_useragent'));
+      return;
+    }
+
     const oauth2 = window.google?.accounts?.oauth2;
     const clientId = firebaseConfig.oAuthClientId;
 
     if (!oauth2 || !clientId) {
       reject(
         new Error(
-          'Google Identity Services belum siap atau OAuth Client ID tidak ditemukan.'
+          'Layanan Google Identity Services masih dimuat atau OAuth Client ID belum tersedia. Pastikan koneksi internet aktif lalu coba ketuk tombol sekali lagi.'
         )
       );
       return;
@@ -213,15 +343,15 @@ export const signInWithGoogleIdentityServices = (
       client_id: clientId,
       scope: scopeList,
       prompt: promptMode,
+      ux_mode: 'popup',
       callback: async (response) => {
         if (response.error || !response.access_token) {
-          reject(
-            new Error(
-              response.error_description ||
-                response.error ||
-                'Gagal mendapatkan token dari Google Identity Services.'
-            )
-          );
+          const errStr = String(response.error_description || response.error || '');
+          if (/popup_closed|access_denied_by_user/i.test(errStr)) {
+            reject(new Error('auth/popup-closed-by-user'));
+            return;
+          }
+          reject(buildOAuthPolicyError(errStr || 'OAuth callback error'));
           return;
         }
         cachedAccessToken = response.access_token;
@@ -231,13 +361,21 @@ export const signInWithGoogleIdentityServices = (
         resolve({ user, accessToken: response.access_token });
       },
       error_callback: (err) => {
-        reject(
-          new Error(
-            err?.message ||
-              err?.type ||
-              'Popup login Google ditutup atau diblokir oleh browser mobile.'
-          )
-        );
+        const errType = String(err?.type || '');
+        const errMsg = String(err?.message || '');
+        if (errType === 'popup_closed') {
+          reject(new Error('auth/popup-closed-by-user'));
+          return;
+        }
+        if (errType === 'popup_failed_to_open') {
+          reject(
+            new Error(
+              'Jendela login Google diblokir oleh browser mobile. Izinkan pop-up pada browser Chrome/Safari atau gunakan "Cek Sesi Server Admin" jika Admin sudah login.'
+            )
+          );
+          return;
+        }
+        reject(buildOAuthPolicyError(errMsg || errType || 'OAuth 2.0 error'));
       },
     });
 
@@ -300,9 +438,15 @@ export const initAuth = (
       if (serverSess?.accessToken) {
         cachedAccessToken = serverSess.accessToken;
         cachedTokenExpiresAt = serverSess.expiresAt;
-        if (serverSess.user && !cachedFallbackUser) {
-          cachedFallbackUser = serverSess.user;
-        }
+        cachedFallbackUser =
+          serverSess.user ||
+          cachedFallbackUser ||
+          ({
+            uid: 'google-oauth-user',
+            email: 'Terhubung via Google OAuth',
+            displayName: 'Petugas Google Workspace',
+            photoURL: null,
+          } as User);
       }
     }
 
@@ -335,6 +479,38 @@ export const googleSignIn = async (): Promise<{
   user: User;
   accessToken: string;
 } | null> => {
+  const env = detectBrowserEnvironment();
+
+  // If on mobile or standalone PWA and Google Identity Services is ready, invoke GIS synchronously
+  // to preserve user-click gesture and avoid cross-origin Firebase popup blockers on mobile.
+  if ((env.isMobile || env.isStandalonePwa) && !env.isInAppBrowser && window.google?.accounts?.oauth2) {
+    try {
+      isSigningIn = true;
+      return await signInWithGoogleIdentityServices('select_account');
+    } catch (gisErr: any) {
+      isSigningIn = false;
+      const msg = String(gisErr?.message || '');
+      if (msg.includes('popup-closed-by-user')) {
+        return null;
+      }
+      const existingServerSession = await refreshServerOAuthSession();
+      if (existingServerSession) {
+        return existingServerSession;
+      }
+      throw gisErr;
+    } finally {
+      isSigningIn = false;
+    }
+  }
+
+  if (env.isInAppBrowser) {
+    const existingServerSession = await refreshServerOAuthSession();
+    if (existingServerSession) {
+      return existingServerSession;
+    }
+    throw buildOAuthPolicyError('disallowed_useragent');
+  }
+
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -351,19 +527,12 @@ export const googleSignIn = async (): Promise<{
     const errMsg = String(error?.message || '');
 
     // 1. Check if server or memory already has an active Google OAuth session
-    const existingServerSession = await fetchSessionFromServer();
-    if (existingServerSession?.accessToken) {
-      cachedAccessToken = existingServerSession.accessToken;
-      cachedTokenExpiresAt = existingServerSession.expiresAt;
-      const user =
-        existingServerSession.user ||
-        (await fetchGoogleUserProfile(existingServerSession.accessToken));
-      cachedFallbackUser = user;
-      authSuccessListeners.forEach((cb) => cb(user, existingServerSession.accessToken));
-      return { user, accessToken: existingServerSession.accessToken };
+    const existingServerSession = await refreshServerOAuthSession();
+    if (existingServerSession) {
+      return existingServerSession;
     }
 
-    // 2. Fallback to Google Identity Services (GIS) OAuth2 Token Client on mobile/popup/domain issues
+    // 2. Fallback to Google Identity Services (GIS) OAuth2 Token Client on popup/domain issues
     if (
       errCode === 'auth/unauthorized-domain' ||
       errMsg.includes('auth/unauthorized-domain') ||
@@ -372,27 +541,21 @@ export const googleSignIn = async (): Promise<{
       errCode === 'auth/popup-closed-by-user' ||
       errCode === 'auth/cancelled-popup-request'
     ) {
+      if (
+        errCode === 'auth/popup-closed-by-user' ||
+        errCode === 'auth/cancelled-popup-request' ||
+        errMsg.includes('popup-closed-by-user')
+      ) {
+        return null;
+      }
       try {
-        const gisResult = await signInWithGoogleIdentityServices('');
+        const gisResult = await signInWithGoogleIdentityServices('select_account');
         return gisResult;
-      } catch {
-        if (
-          errCode === 'auth/popup-closed-by-user' ||
-          errCode === 'auth/cancelled-popup-request' ||
-          errMsg.includes('popup-closed-by-user')
-        ) {
-          // User closed the popup window; return null cleanly instead of throwing an error banner
+      } catch (gisErr: any) {
+        if (String(gisErr?.message || '').includes('popup-closed-by-user')) {
           return null;
         }
-        const currentDomain =
-          typeof window !== 'undefined' ? window.location.hostname : '';
-        const enhancedError: any = new Error(
-          `Domain aplikasi (${currentDomain}) belum diizinkan pada popup Firebase. Silakan gunakan tombol "Login Google Mobile" di bawah.`
-        );
-        enhancedError.code = 'auth/unauthorized-domain';
-        enhancedError.currentDomain = currentDomain;
-        enhancedError.firebaseAuthUrl = FIREBASE_AUTH_DOMAINS_URL;
-        throw enhancedError;
+        throw gisErr?.code ? gisErr : buildOAuthPolicyError(errCode || errMsg);
       }
     }
 
@@ -410,8 +573,15 @@ export const getAccessToken = async (): Promise<string | null> => {
   if (serverSess?.accessToken) {
     cachedAccessToken = serverSess.accessToken;
     cachedTokenExpiresAt = serverSess.expiresAt;
-    if (serverSess.user && !cachedFallbackUser) {
-      cachedFallbackUser = serverSess.user;
+    if (!cachedFallbackUser) {
+      cachedFallbackUser =
+        serverSess.user ||
+        ({
+          uid: 'google-oauth-user',
+          email: 'Terhubung via Google OAuth',
+          displayName: 'Petugas Google Workspace',
+          photoURL: null,
+        } as User);
     }
     return cachedAccessToken;
   }

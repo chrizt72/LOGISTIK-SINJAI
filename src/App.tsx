@@ -31,6 +31,10 @@ import {
   Package,
   Wrench,
   ClipboardCheck,
+  ExternalLink,
+  ShieldAlert,
+  Smartphone,
+  Lock,
 } from 'lucide-react';
 import {
   MaterialRow,
@@ -76,6 +80,13 @@ import {
   initAuth,
   googleSignIn,
   signInWithGoogleIdentityServices,
+  refreshServerOAuthSession,
+  detectBrowserEnvironment,
+  FIREBASE_PROJECT_ID,
+  OAUTH_CLIENT_ID,
+  FIREBASE_AUTH_DOMAINS_URL,
+  GCP_OAUTH_CLIENTS_URL,
+  GCP_OAUTH_CONSENT_AUDIENCE_URL,
   getAccessToken,
   logoutGoogle,
   SpreadsheetMetadata,
@@ -110,6 +121,89 @@ type ActiveSection =
   | 'spreadsheet'
   | 'riwayat';
 
+const DEFAULT_MATERIAL_CATALOG: MaterialCatalogItem[] = [
+  {
+    noMaterial: '2190224',
+    spesifikasi: 'MTR;kWH E-PR;;1P;230V;5-60A;1;;2W',
+    kategori: 'kWh Meter',
+    defaultBatch: '15',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+  {
+    noMaterial: '2190502',
+    spesifikasi: 'MTR;kWH E;;1P;230V;5-60A;1;;2W',
+    kategori: 'kWh Meter',
+    defaultBatch: '102',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+  {
+    noMaterial: '2190218',
+    spesifikasi: 'MTR;kWH E;;3P;230/400V;5-80A;1;;4W',
+    kategori: 'kWh Meter',
+    defaultBatch: '260701',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+  {
+    noMaterial: '2190252',
+    spesifikasi: 'MTR;kWH E-PR;;3P;230/400V;5-80A;1;;4W',
+    kategori: 'kWh Meter',
+    defaultBatch: '0392J',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+  {
+    noMaterial: '2190267',
+    spesifikasi: 'MTR;kWH E;;1P;220/240V;5-100A;1;ST;2W',
+    kategori: 'kWh Meter',
+    defaultBatch: '6',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+  {
+    noMaterial: '2190438',
+    spesifikasi: 'MTR;kWHE;;3P;57.7/100V-230/400;5A;0.5;4W',
+    kategori: 'kWh Meter',
+    defaultBatch: '507G',
+    valuationType: 'NORMAL',
+    plant: '7417',
+    storLoc: '2500',
+    companyCode: '74',
+    unitInduk: 'UIW SULSELRABAR',
+    unit: 'ULP SINJAI',
+    storLocName: 'Gd ULP Sinjai',
+  },
+];
+
+const NETLIFY_STATIC_CACHE_KEY = 'sinjai_benderang_static_cache_v1';
+
 interface ReadyInboundItem {
   snMaterial: string;
   noMaterial: string;
@@ -139,7 +233,8 @@ export default function App() {
   );
   const [logs, setLogs] = useState<ScanLogEntry[]>([]);
   const [stats, setStats] = useState<WarehouseStats | null>(null);
-  const [catalog, setCatalog] = useState<MaterialCatalogItem[]>([]);
+  const [catalog, setCatalog] = useState<MaterialCatalogItem[]>(DEFAULT_MATERIAL_CATALOG);
+  const hasBackendServerRef = useRef<boolean>(false);
   const [sheetConfig, setSheetConfig] = useState({
     spreadsheetName: 'LOGISTIK_SINJAI',
     sheetName: 'MATERIAL_MASUK',
@@ -190,6 +285,10 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [authDomainError, setAuthDomainError] = useState<string | null>(null);
+  const [showOAuthTroubleshooting, setShowOAuthTroubleshooting] = useState<boolean>(false);
+  const [copiedAuthKey, setCopiedAuthKey] = useState<string | null>(null);
+  const [isCheckingServerSession, setIsCheckingServerSession] = useState<boolean>(false);
+  const browserEnv = useMemo(() => detectBrowserEnvironment(), []);
   const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(() => {
     try {
       const saved = localStorage.getItem(CONNECTED_SHEET_STORAGE_KEY);
@@ -279,8 +378,24 @@ export default function App() {
       const rawText = await res.text();
       const trimmed = rawText.trim();
       if (!res.ok || !trimmed || trimmed.startsWith('<')) {
+        // Static hosting fallback (e.g., Netlify)
+        try {
+          const cachedRaw = localStorage.getItem(NETLIFY_STATIC_CACHE_KEY);
+          if (cachedRaw) {
+            const cached = JSON.parse(cachedRaw);
+            if (Array.isArray(cached.rows)) setRows(cached.rows);
+            if (Array.isArray(cached.eksekusiMimsRows)) {
+              setEksekusiMimsRows(cached.eksekusiMimsRows);
+            }
+            if (Array.isArray(cached.yantekReports)) setYantekReports(cached.yantekReports);
+            if (Array.isArray(cached.hvbReports)) setHvbReports(cached.hvbReports);
+          }
+        } catch {
+          // Ignore local cache parse error
+        }
         return;
       }
+      hasBackendServerRef.current = true;
       const data = JSON.parse(trimmed);
       setRows(data.rows || []);
       setEksekusiMimsRows(data.eksekusiMimsRows || []);
@@ -301,7 +416,9 @@ export default function App() {
       }
       setLogs(data.logs || []);
       setStats(data.stats || null);
-      setCatalog(data.catalog || []);
+      if (Array.isArray(data.catalog) && data.catalog.length > 0) {
+        setCatalog(data.catalog);
+      }
       if (data.sheetConfig) setSheetConfig(data.sheetConfig);
     } catch (err) {
       console.warn('Info sinkronisasi awal:', err);
@@ -309,6 +426,23 @@ export default function App() {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isLoading || hasBackendServerRef.current) return;
+    try {
+      localStorage.setItem(
+        NETLIFY_STATIC_CACHE_KEY,
+        JSON.stringify({
+          rows,
+          eksekusiMimsRows,
+          yantekReports,
+          hvbReports,
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [isLoading, rows, eksekusiMimsRows, yantekReports, hvbReports]);
 
   useEffect(() => {
     fetchWarehouseData();
@@ -370,6 +504,7 @@ export default function App() {
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
         setAuthDomainError(null);
+        setShowOAuthTroubleshooting(false);
         setInlineBanner({
           type: 'success',
           title: 'Berhasil Masuk ke Google Workspace',
@@ -385,21 +520,22 @@ export default function App() {
         msg.includes('popup-closed-by-user') ||
         msg.includes('cancelled-popup-request')
       ) {
-        // User simply closed the popup window; do not show an error banner
         return;
       }
-      if (
-        errCode === 'auth/unauthorized-domain' ||
-        msg.includes('unauthorized-domain') ||
-        msg.includes('Authorized domains')
-      ) {
-        setAuthDomainError(msg);
-      }
+      setAuthDomainError(
+        msg ||
+          'Login Google gagal atau diblokir kebijakan OAuth 2.0 Google. Periksa panduan di bawah.'
+      );
+      setShowOAuthTroubleshooting(true);
       setInlineBanner({
-        type: 'warning',
-        title: 'Informasi Login Google',
+        type: 'error',
+        title:
+          errCode === 'oauth/disallowed-webview'
+            ? 'Buka Aplikasi di Chrome / Safari'
+            : 'Otorisasi Google OAuth 2.0 Diblokir',
         message:
-          'Silakan klik tombol "Login Google Mobile" di bawah untuk melanjutkan otorisasi.',
+          msg ||
+          'Silakan periksa Origin & OAuth Consent Screen pada panduan di bawah, atau coba tombol "Login Google Mobile".',
       });
     } finally {
       setIsSigningIn(false);
@@ -409,13 +545,15 @@ export default function App() {
   const handleDirectGisLogin = async () => {
     setIsSigningIn(true);
     setAuthDomainError(null);
+    setInlineBanner(null);
     try {
-      const result = await signInWithGoogleIdentityServices();
+      const result = await signInWithGoogleIdentityServices('select_account');
       if (result) {
         setGoogleUser(result.user);
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
         setAuthDomainError(null);
+        setShowOAuthTroubleshooting(false);
         setInlineBanner({
           type: 'success',
           title: 'Berhasil Masuk via Google OAuth Mobile',
@@ -423,13 +561,69 @@ export default function App() {
         });
       }
     } catch (err: any) {
+      const errCode = String(err?.code || '');
+      const msg = String(err?.message || '');
+      if (
+        errCode === 'auth/popup-closed-by-user' ||
+        msg.includes('popup-closed-by-user')
+      ) {
+        return;
+      }
       console.error('Direct GIS login failed:', err);
-      const msg =
-        err?.message ||
-        'Gagal login melalui Google Identity Services. Pastikan domain aplikasi sudah terdaftar di Firebase Console → Authorized domains.';
-      setAuthDomainError(msg);
+      const resolvedMsg =
+        msg ||
+        'Gagal login melalui Google Identity Services. Pastikan Origin aplikasi sudah terdaftar di Google Cloud Console & Firebase Console.';
+      setAuthDomainError(resolvedMsg);
+      setShowOAuthTroubleshooting(true);
+      setInlineBanner({
+        type: 'error',
+        title:
+          errCode === 'oauth/disallowed-webview'
+            ? 'Buka Aplikasi di Chrome / Safari'
+            : 'Login Google Mobile Diblokir OAuth 2.0',
+        message: resolvedMsg,
+      });
     } finally {
       setIsSigningIn(false);
+    }
+  };
+
+  const handleRefreshServerSession = async () => {
+    setIsCheckingServerSession(true);
+    setInlineBanner(null);
+    try {
+      const sess = await refreshServerOAuthSession();
+      if (sess) {
+        setGoogleUser(sess.user);
+        setAccessToken(sess.accessToken);
+        setNeedsAuth(false);
+        setAuthDomainError(null);
+        setShowOAuthTroubleshooting(false);
+        setInlineBanner({
+          type: 'success',
+          title: 'Sesi Google Server Aktif',
+          message: `Berhasil menggunakan sesi aktif (${sess.user.email}).`,
+        });
+      } else {
+        setInlineBanner({
+          type: 'warning',
+          title: 'Belum Ada Sesi Server Aktif',
+          message:
+            'Admin belum login Google pada server ini atau sesi sudah kedaluwarsa. Anda tetap dapat masuk ke menu layanan di bawah, atau Admin perlu mendaftarkan Origin & email petugas.',
+        });
+      }
+    } finally {
+      setIsCheckingServerSession(false);
+    }
+  };
+
+  const handleCopyAuthValue = async (key: string, val: string) => {
+    try {
+      await navigator.clipboard.writeText(val);
+      setCopiedAuthKey(key);
+      setTimeout(() => setCopiedAuthKey(null), 2200);
+    } catch {
+      // Ignore clipboard failure
     }
   };
 
@@ -1868,7 +2062,18 @@ export default function App() {
   );
 
   if (isLoginPageOpen) {
+    const isGoogleAuthenticated = Boolean(googleUser && accessToken && !needsAuth);
+
     const handleEnterModule = (mod: ActiveModule) => {
+      if (!isGoogleAuthenticated) {
+        setInlineBanner({
+          type: 'warning',
+          title: 'Menu Terkunci',
+          message:
+            'Silakan login akun Google Workspace terlebih dahulu untuk membuka menu layanan.',
+        });
+        return;
+      }
       setSelectedModule(mod);
       if (mod === 'logistik') {
         setActiveSection('masuk');
@@ -1921,6 +2126,59 @@ export default function App() {
               >
                 Tutup
               </button>
+            </div>
+          )}
+
+          {/* Peringatan In-App Browser (WhatsApp / Telegram / IG) */}
+          {browserEnv.isInAppBrowser && (!googleUser || needsAuth) && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 space-y-2.5 text-xs text-amber-950 dark:text-amber-100">
+              <div className="flex items-start gap-2">
+                <Smartphone className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">
+                    Terbuka di Browser {browserEnv.inAppName || 'Aplikasi'}
+                  </div>
+                  <p className="mt-0.5 leading-relaxed opacity-90">
+                    Google memblokir login OAuth 2.0 di dalam WebView WhatsApp/Telegram/IG (
+                    <code className="font-mono">disallowed_useragent</code>). Buka link ini di{' '}
+                    <strong>Google Chrome</strong> atau <strong>Safari</strong> agar petugas bisa
+                    login.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {browserEnv.chromeIntentUrl && (
+                  <a
+                    href={browserEnv.chromeIntentUrl}
+                    className="flex-1 min-h-[38px] px-3 py-1.5 text-xs font-bold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl flex items-center justify-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                    <span>Buka di Google Chrome</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyAuthValue(
+                      'appUrl',
+                      typeof window !== 'undefined' ? window.location.href : ''
+                    )
+                  }
+                  className="flex-1 min-h-[38px] px-3 py-1.5 text-xs font-bold text-amber-950 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl flex items-center justify-center gap-1.5"
+                >
+                  {copiedAuthKey === 'appUrl' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Link Tersalin</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Salin Link Aplikasi</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           )}
 
@@ -1996,56 +2254,233 @@ export default function App() {
                   disabled={isSigningIn}
                   className="w-full min-h-[42px] px-4 py-2 text-xs font-semibold text-[#0b4f6c] dark:text-cyan-300 bg-cyan-50 hover:bg-cyan-100 dark:bg-cyan-950/60 border border-cyan-200 dark:border-cyan-800 rounded-xl transition-colors"
                 >
-                  Login Google Mobile
+                  Login Google Mobile (OAuth Langsung)
                 </button>
+
+                <div className="w-full flex items-center justify-between gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={handleRefreshServerSession}
+                    disabled={isCheckingServerSession}
+                    className="text-[11px] font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${isCheckingServerSession ? 'animate-spin' : ''}`}
+                    />
+                    <span>Cek Sesi Server Admin</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowOAuthTroubleshooting((prev) => !prev)}
+                    className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1"
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      {showOAuthTroubleshooting
+                        ? 'Tutup Panduan OAuth 2.0'
+                        : 'Kendala OAuth 2.0 di HP?'}
+                    </span>
+                  </button>
+                </div>
+
+                {(showOAuthTroubleshooting || authDomainError) && (
+                  <div className="w-full p-3.5 rounded-2xl bg-amber-50/95 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-2.5 text-[11px] text-slate-700 dark:text-slate-200 text-left">
+                    <div className="font-bold text-amber-950 dark:text-amber-100 flex items-center gap-1.5">
+                      <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Solusi Error &quot;Kebijakan OAuth 2.0 Google&quot; di HP:</span>
+                    </div>
+
+                    <ol className="list-decimal pl-4 space-y-1.5 leading-relaxed">
+                      <li>
+                        <strong>Jangan buka link dari WhatsApp/Telegram langsung:</strong> Gunakan
+                        Chrome (Android) atau Safari (iOS).
+                      </li>
+                      <li>
+                        <strong>Daftarkan Origin Netlify / Domain Aplikasi ke OAuth Client:</strong>{' '}
+                        Salin Origin &amp; Redirect URI di bawah lalu tambahkan ke{' '}
+                        <em>Authorized JavaScript origins</em> dan{' '}
+                        <em>Authorized redirect URIs</em> pada Client ID{' '}
+                        <code className="font-mono break-all">{OAUTH_CLIENT_ID}</code>:
+                        {browserEnv.currentOrigin && (
+                          <div className="mt-1 space-y-1">
+                            <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-slate-700">
+                              <code className="font-mono text-[10px] truncate">
+                                {browserEnv.currentOrigin}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyAuthValue('origin', browserEnv.currentOrigin)
+                                }
+                                className="px-2 py-1 text-[10px] font-bold text-white bg-slate-900 dark:bg-sky-600 rounded flex items-center gap-1 shrink-0"
+                              >
+                                {copiedAuthKey === 'origin' ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span>Tersalin</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin Origin</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-slate-700">
+                              <code className="font-mono text-[10px] truncate">
+                                {browserEnv.currentHostname}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyAuthValue('hostname', browserEnv.currentHostname)
+                                }
+                                className="px-2 py-1 text-[10px] font-bold text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 rounded flex items-center gap-1 shrink-0"
+                              >
+                                {copiedAuthKey === 'hostname' ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-500" />
+                                    <span>Tersalin</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin Domain</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </li>
+                      <li>
+                        <strong>Publish OAuth Consent Screen / Tambah Email Petugas:</strong> Jika
+                        status masih <em>Testing</em>, hanya email di <em>Test users</em> yang bisa
+                        login dari HP. Ubah ke <strong>In Production</strong> atau tambahkan Gmail
+                        petugas.
+                      </li>
+                    </ol>
+
+                    <div className="grid grid-cols-1 gap-1.5 pt-1">
+                      <a
+                        href={GCP_OAUTH_CLIENTS_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[34px] px-3 py-1.5 text-[11px] font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl flex items-center justify-center gap-1.5"
+                      >
+                        <span>Buka OAuth Credentials ({FIREBASE_PROJECT_ID})</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                      <a
+                        href={GCP_OAUTH_CONSENT_AUDIENCE_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[34px] px-3 py-1.5 text-[11px] font-bold text-amber-950 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl flex items-center justify-center gap-1.5"
+                      >
+                        <span>Buka OAuth Consent / Test Users</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                      <a
+                        href={FIREBASE_AUTH_DOMAINS_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[34px] px-3 py-1.5 text-[11px] font-bold text-amber-950 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl flex items-center justify-center gap-1.5"
+                      >
+                        <span>Buka Firebase Authorized Domains</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
           <div className="relative flex py-1 items-center">
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
-            <span className="flex-shrink mx-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-              Pilih Layanan
+            <span className="flex-shrink mx-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              {!isGoogleAuthenticated && <Lock className="w-3 h-3 text-amber-600 shrink-0" />}
+              <span>
+                {isGoogleAuthenticated
+                  ? 'Pilih Layanan'
+                  : 'Menu Terkunci · Login Google Dulu'}
+              </span>
             </span>
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
           </div>
 
           {/* 3 Tombol Halaman Depan Tanpa Tulisan "Menu" */}
-          <div className="space-y-2.5">
+          <div
+            className={`space-y-2.5 transition-all duration-200 ${
+              !isGoogleAuthenticated ? 'opacity-55 grayscale-[60%] select-none' : ''
+            }`}
+          >
             <button
               type="button"
+              disabled={!isGoogleAuthenticated}
+              aria-disabled={!isGoogleAuthenticated}
               onClick={() => handleEnterModule('logistik')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className={`w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#0b4f6c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm ${
+                isGoogleAuthenticated
+                  ? 'hover:bg-[#083d54] cursor-pointer'
+                  : 'cursor-not-allowed'
+              }`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <Package className="w-5 h-5 text-[#facc15] shrink-0" />
                 <div className="text-sm font-bold leading-tight">Logistik</div>
               </div>
-              <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
+              {isGoogleAuthenticated ? (
+                <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
+              ) : (
+                <Lock className="w-4 h-4 text-slate-200 shrink-0" />
+              )}
             </button>
 
             <button
               type="button"
+              disabled={!isGoogleAuthenticated}
+              aria-disabled={!isGoogleAuthenticated}
               onClick={() => handleEnterModule('yantek')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#ea580c] hover:bg-[#c2410c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className={`w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#ea580c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm ${
+                isGoogleAuthenticated
+                  ? 'hover:bg-[#c2410c] cursor-pointer'
+                  : 'cursor-not-allowed'
+              }`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <Wrench className="w-5 h-5 text-white shrink-0" />
                 <div className="text-sm font-bold leading-tight">Realisasi Yantek</div>
               </div>
-              <LogIn className="w-4 h-4 shrink-0" />
+              {isGoogleAuthenticated ? (
+                <LogIn className="w-4 h-4 shrink-0" />
+              ) : (
+                <Lock className="w-4 h-4 text-slate-200 shrink-0" />
+              )}
             </button>
 
             <button
               type="button"
+              disabled={!isGoogleAuthenticated}
+              aria-disabled={!isGoogleAuthenticated}
               onClick={() => handleEnterModule('hvb')}
-              className="w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#126b82] hover:bg-[#0b4f6c] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm"
+              className={`w-full min-h-[52px] px-4 py-3 text-left text-white bg-[#126b82] rounded-xl transition-colors flex items-center justify-between gap-3 shadow-sm ${
+                isGoogleAuthenticated
+                  ? 'hover:bg-[#0b4f6c] cursor-pointer'
+                  : 'cursor-not-allowed'
+              }`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <ClipboardCheck className="w-5 h-5 text-[#facc15] shrink-0" />
                 <div className="text-sm font-bold leading-tight">Realisasi HVB</div>
               </div>
-              <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
+              {isGoogleAuthenticated ? (
+                <LogIn className="w-4 h-4 text-[#facc15] shrink-0" />
+              ) : (
+                <Lock className="w-4 h-4 text-slate-200 shrink-0" />
+              )}
             </button>
           </div>
         </div>
