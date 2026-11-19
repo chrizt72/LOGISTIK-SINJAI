@@ -88,13 +88,13 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
   // 3. Input Pekerjaan + Volume state
   const [pekerjaanQuery, setPekerjaanQuery] = useState<string>('');
   const [isPekerjaanDropdownOpen, setIsPekerjaanDropdownOpen] = useState<boolean>(false);
-  const [volumeInput, setVolumeInput] = useState<string>('1');
+  const [volumeInput, setVolumeInput] = useState<string>('');
   const [pekerjaanList, setPekerjaanList] = useState<YantekWorkItemInput[]>([]);
 
   // Koordinat Awal & Akhir + Realisasi WO & P0
   const [koordinatAwal, setKoordinatAwal] = useState<string>('');
   const [koordinatAkhir, setKoordinatAkhir] = useState<string>('');
-  const [realisasiWo, setRealisasiWo] = useState<string>('1');
+  const [realisasiWo, setRealisasiWo] = useState<string>('');
   const [realisasiP0, setRealisasiP0] = useState<string>('0');
   const [isLocatingGps, setIsLocatingGps] = useState<'awal' | 'akhir' | null>(null);
 
@@ -301,7 +301,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
       ];
     });
     setPekerjaanQuery('');
-    setVolumeInput('1');
+    setVolumeInput('');
     setIsPekerjaanDropdownOpen(false);
     setFormError(null);
     if (onTriggerSound) onTriggerSound('scan');
@@ -474,6 +474,11 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
       return;
     }
 
+    if (realisasiWo.trim() === '') {
+      setFormError('Jumlah Realisasi WO wajib diisi oleh petugas.');
+      return;
+    }
+
     const numWo = Number(realisasiWo);
     const numP0 = Number(realisasiP0);
     if (!Number.isFinite(numWo) || numWo < 0 || !Number.isFinite(numP0) || numP0 < 0) {
@@ -568,10 +573,10 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
 
       setPekerjaanList([]);
       setPekerjaanQuery('');
-      setVolumeInput('1');
+      setVolumeInput('');
       setKoordinatAwal('');
       setKoordinatAkhir('');
-      setRealisasiWo('0');
+      setRealisasiWo('');
       setRealisasiP0('0');
       setCompletedReportModal(savedReport);
     } catch (err: any) {
@@ -983,7 +988,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
                       handleAddPekerjaanItem();
                     }
                   }}
-                  placeholder="Jumlah"
+                  placeholder="Isi jumlah"
                   className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
@@ -1123,7 +1128,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
                   required
                   value={realisasiWo}
                   onChange={(e) => setRealisasiWo(e.target.value)}
-                  placeholder="0"
+                  placeholder="Isi jumlah WO"
                   className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>

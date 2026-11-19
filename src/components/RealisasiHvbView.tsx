@@ -86,7 +86,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
   // 3. Input Pekerjaan + Volume state
   const [pekerjaanQuery, setPekerjaanQuery] = useState<string>('');
   const [isPekerjaanDropdownOpen, setIsPekerjaanDropdownOpen] = useState<boolean>(false);
-  const [volumeInput, setVolumeInput] = useState<string>('1');
+  const [volumeInput, setVolumeInput] = useState<string>('');
   const [pekerjaanList, setPekerjaanList] = useState<YantekWorkItemInput[]>([]);
 
   // Koordinat Awal & Akhir
@@ -296,7 +296,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
       ];
     });
     setPekerjaanQuery('');
-    setVolumeInput('1');
+    setVolumeInput('');
     setIsPekerjaanDropdownOpen(false);
     setFormError(null);
     if (onTriggerSound) onTriggerSound('scan');
@@ -544,7 +544,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
       setPekerjaanList([]);
       setPekerjaanQuery('');
-      setVolumeInput('1');
+      setVolumeInput('');
       setKoordinatAwal('');
       setKoordinatAkhir('');
       setCompletedReportModal(savedReport);
@@ -936,7 +936,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
                       handleAddPekerjaanItem();
                     }
                   }}
-                  placeholder="Jumlah"
+                  placeholder="Isi jumlah"
                   className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 tabular-nums"
                 />
               </div>
