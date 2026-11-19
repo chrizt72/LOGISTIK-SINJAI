@@ -33,13 +33,13 @@ export const PWAInstallButton: React.FC = () => {
 
       {showGuideModal && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] sm:p-4"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 pb-[calc(env(safe-area-inset-bottom,0px)+68px)] sm:p-4"
           onClick={() => setShowGuideModal(false)}
         >
           <div
             role="dialog"
             aria-modal="true"
-            className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl sm:rounded-2xl p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl sm:rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl max-h-[82vh] sm:max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Mobile Grab Handle */}
@@ -165,7 +165,7 @@ export const OfflineIndicator: React.FC = () => {
   if (isOnline) return null;
 
   return (
-    <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+82px)] md:bottom-4 left-4 right-4 sm:right-auto z-50 flex items-center gap-2.5 rounded-xl bg-amber-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg">
+    <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+132px)] md:bottom-4 left-3 right-3 sm:right-auto z-50 flex items-center gap-2.5 rounded-xl bg-amber-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg">
       <WifiOff className="w-4 h-4 shrink-0 animate-pulse" />
       <span>Mode Offline — Menampilkan data stok gudang tersimpan.</span>
     </div>

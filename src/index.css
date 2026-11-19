@@ -14,9 +14,18 @@
     --brand-gold: #facc15;
   }
 
+  html {
+    max-width: 100%;
+    overflow-x: clip;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     font-family: var(--font-sans);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    max-width: 100%;
+    overflow-x: clip;
+    min-height: 100dvh;
   }
 
   h1, h2, h3, h4, .font-display {
@@ -49,16 +58,16 @@
   letter-spacing: 0.25px;
   outline: none;
   overflow: hidden;
-  padding: 0 14px;
+  padding: 0 12px;
   position: relative;
   text-align: center;
   -webkit-transition: background-color .218s, border-color .218s, box-shadow .218s;
   transition: background-color .218s, border-color .218s, box-shadow .218s;
   vertical-align: middle;
   white-space: nowrap;
-  width: auto;
-  max-width: 400px;
-  min-width: min-content;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .gsi-material-button .gsi-material-button-icon {

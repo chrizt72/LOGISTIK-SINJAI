@@ -2093,11 +2093,11 @@ export default function App() {
     };
 
     return (
-      <div className="min-h-screen flex flex-col justify-between bg-gradient-to-b from-[#083d54] via-[#126b82] to-[#2c96ab] text-slate-900 dark:text-slate-100 px-4 py-8">
-        <div className="w-full max-w-md mx-auto my-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-[#04212e]/45 space-y-6">
+      <div className="min-h-screen flex flex-col justify-between bg-gradient-to-b from-[#083d54] via-[#126b82] to-[#2c96ab] text-slate-900 dark:text-slate-100 px-3 sm:px-4 pt-5 pb-24 sm:py-8 overflow-x-clip">
+        <div className="w-full max-w-md mx-auto my-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-4 sm:p-8 shadow-2xl shadow-[#04212e]/45 space-y-5 sm:space-y-6">
           {/* Brand Header */}
           <div className="text-center space-y-2.5">
-            <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full mx-auto p-0.5 bg-gradient-to-br from-[#facc15] via-[#0b4f6c] to-[#ea580c] shadow-lg shadow-[#083d54]/30">
+            <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full mx-auto p-0.5 bg-gradient-to-br from-[#facc15] via-[#0b4f6c] to-[#ea580c] shadow-lg shadow-[#083d54]/30">
               <img
                 src="/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png"
                 alt="Logo PLN UP3 Bulukumba"
@@ -2264,7 +2264,7 @@ export default function App() {
                   Login Google Mobile (OAuth Langsung)
                 </button>
 
-                <div className="w-full flex items-center justify-between gap-2 pt-0.5">
+                <div className="w-full flex flex-wrap items-center justify-between gap-2 pt-0.5">
                   <button
                     type="button"
                     onClick={handleRefreshServerSession}
@@ -2391,13 +2391,13 @@ export default function App() {
                         project GCP Anda (mis. <code className="font-mono">logistiksinjai</code>),
                         isi Origin Netlify di atas, lalu tempel Client ID di sini:
                       </p>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         <input
                           type="text"
                           value={customClientIdInput}
                           onChange={(e) => setCustomClientIdInput(e.target.value)}
                           placeholder="xxxx.apps.googleusercontent.com"
-                          className="flex-1 min-h-[34px] px-2.5 py-1 text-[11px] font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                          className="min-w-0 flex-1 min-h-[34px] px-2.5 py-1 text-[11px] font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                         />
                         <button
                           type="button"
@@ -2561,7 +2561,7 @@ export default function App() {
         {/* Public Application Overview & Data Transparency Section (Visible Without Login) */}
         <section
           aria-label="Application Information and Google API Data Usage"
-          className="w-full max-w-3xl mx-auto mt-8 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-6 sm:p-8 shadow-xl shadow-[#04212e]/30 space-y-6"
+          className="w-full max-w-3xl mx-auto mt-5 sm:mt-8 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-4 sm:p-8 shadow-xl shadow-[#04212e]/30 space-y-5 sm:space-y-6"
         >
           <div className="space-y-2">
             <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#0b4f6c] dark:text-[#facc15]">
@@ -2663,7 +2663,7 @@ export default function App() {
           TOP BAR CONTRACT: 3 Zones separated by gap-8
           Setiap Menu Dipisah sesuai pilihan dari Halaman Login
       ====================================================================== */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 h-14 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-cyan-900/15 dark:border-cyan-800/40">
+      <header className="sticky top-0 z-30 w-full max-w-full flex items-center justify-between gap-2 sm:gap-8 px-3 sm:px-6 h-14 sm:h-15 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-cyan-900/15 dark:border-cyan-800/40">
         {/* Zone 1: Brand mark with logo */}
         <a
           href="#top"
@@ -2677,15 +2677,15 @@ export default function App() {
               setActiveSection('hvb');
             }
           }}
-          className="flex items-center gap-2.5 text-sm sm:text-base font-bold tracking-tight text-[#083d54] dark:text-white whitespace-nowrap shrink-0 font-display"
+          className="min-w-0 flex items-center gap-2 text-xs sm:text-base font-bold tracking-tight text-[#083d54] dark:text-white whitespace-nowrap font-display"
         >
           <img
             src="/assets/aistudio/pln_up3_bulukumba_512x512_17c93b22.png"
             alt="PLN UP3 Bulukumba"
             referrerPolicy="no-referrer"
-            className="w-8 h-8 rounded-full object-cover ring-1 ring-[#facc15] bg-[#083d54] shrink-0"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover ring-1 ring-[#facc15] bg-[#083d54] shrink-0"
           />
-          <span>SINJAI BENDERANG</span>
+          <span className="truncate">SINJAI BENDERANG</span>
         </a>
 
         {/* Zone 2: Navigation strictly scoped to selectedModule */}
@@ -2761,33 +2761,35 @@ export default function App() {
         </nav>
 
         {/* Zone 3: Actions */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {selectedModule === 'logistik' && (
             <button
               type="button"
               onClick={() => setIsSyncModalOpen(true)}
-              className="min-h-[38px] sm:min-h-[40px] px-3 sm:px-4 py-1.5 text-xs font-semibold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-4 py-1.5 text-[11px] sm:text-xs font-semibold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl transition-colors whitespace-nowrap shrink-0"
             >
-              Sinkronisasi Sheet
+              <span className="hidden sm:inline">Sinkronisasi Sheet</span>
+              <span className="sm:hidden">Sync Sheet</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => setIsLoginPageOpen(true)}
-            className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-[#083d54] dark:text-slate-200 bg-cyan-50 hover:bg-cyan-100 dark:bg-slate-800 border border-cyan-200/80 dark:border-slate-700 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-[#083d54] dark:text-slate-200 bg-cyan-50 hover:bg-cyan-100 dark:bg-slate-800 border border-cyan-200/80 dark:border-slate-700 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
             title="Kembali ke Halaman Depan & Login"
           >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Halaman Depan</span>
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">Halaman Depan</span>
+            <span className="sm:hidden">Beranda</span>
           </button>
         </div>
       </header>
 
       {/* =====================================================================
           MAIN WORKSPACE CONTAINER
-          pb-32 on mobile so content clears the Floating Bottom Navigation Dock
+          pb-44 on mobile so content clears the Raised Bottom Nav Dock & Netlify badge
       ====================================================================== */}
-      <main className="flex-1 w-full max-w-[1440px] mx-auto px-3.5 sm:px-6 pt-4 pb-32 md:pb-8 space-y-5">
+      <main className="flex-1 w-full min-w-0 max-w-[1440px] mx-auto px-3 sm:px-6 pt-3.5 sm:pt-4 pb-44 md:pb-8 space-y-5 overflow-x-clip">
         {/* Contextual Header & KPI Cards (Separated per selectedModule) */}
         <section className="space-y-3.5">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3">
@@ -3214,7 +3216,7 @@ export default function App() {
                         type="button"
                         disabled={isProcessingOutbound}
                         onClick={handleImportOutboundReadyList}
-                        className="min-h-[44px] min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
+                        className="flex-1 sm:flex-initial min-h-[44px] sm:min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
                       >
                         {isProcessingOutbound ? (
                           <RefreshCw className="w-5 h-5 animate-spin" />
@@ -3376,7 +3378,7 @@ export default function App() {
                         type="button"
                         disabled={isProcessingOutbound}
                         onClick={handleImportOutboundReadyList}
-                        className="min-h-[46px] min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
+                        className="w-full sm:w-auto min-h-[46px] sm:min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                       >
                         {isProcessingOutbound ? (
                           <RefreshCw className="w-5 h-5 animate-spin" />
@@ -3635,7 +3637,7 @@ export default function App() {
                         type="button"
                         onClick={handleImportInboundReadyList}
                         disabled={isProcessingInbound}
-                        className="min-h-[44px] min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
+                        className="flex-1 sm:flex-initial min-h-[44px] sm:min-w-[140px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-xs"
                       >
                         {isProcessingInbound ? (
                           <RefreshCw className="w-5 h-5 animate-spin" />
@@ -3798,7 +3800,7 @@ export default function App() {
                         type="button"
                         disabled={isProcessingInbound}
                         onClick={handleImportInboundReadyList}
-                        className="min-h-[46px] min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
+                        className="w-full sm:w-auto min-h-[46px] sm:min-w-[160px] px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                       >
                         {isProcessingInbound ? (
                           <RefreshCw className="w-5 h-5 animate-spin" />
@@ -4275,7 +4277,7 @@ export default function App() {
 
                     {/* Search Input + CSV Export */}
                     <div className="flex items-center gap-2">
-                      <div className="relative flex-1 sm:min-w-[220px]">
+                      <div className="relative flex-1 min-w-0 sm:min-w-[220px]">
                         <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                         <input
                           type="search"
@@ -4766,33 +4768,33 @@ export default function App() {
 
       {/* =====================================================================
           MOBILE FLOATING BOTTOM NAVIGATION DOCK (md:hidden)
-          Hanya menampilkan navigasi sesuai menu aktif
+          Diposisikan di atas zona logo/badge Netlify (+68px) agar tombol tidak tertutup
       ====================================================================== */}
-      <div className="md:hidden fixed left-2.5 right-2.5 bottom-[calc(env(safe-area-inset-bottom,0px)+14px)] z-40 pointer-events-none">
+      <div className="md:hidden fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+68px)] z-40 pointer-events-none">
         {selectedModule === 'logistik' ? (
           <nav
             aria-label="Navigasi Utama Mobile Logistik"
-            className="pointer-events-auto mx-auto max-w-lg bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-4 items-center gap-1 p-1.5"
+            className="pointer-events-auto mx-auto max-w-lg bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-4 items-center gap-1 p-1"
           >
             {/* Posisi 1 (Pertama / Kiri): Masuk */}
             <button
               type="button"
               onClick={() => setActiveSection('masuk')}
-              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+              className={`min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl transition-all ${
                 activeSection === 'masuk'
                   ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold shadow-2xs'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
               <div className="relative">
-                <ArrowDownLeft className="w-5 h-5" />
+                <ArrowDownLeft className="w-[18px] h-[18px]" />
                 {inboundReadyList.length > 0 && (
                   <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
                     {inboundReadyList.length}
                   </span>
                 )}
               </div>
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 Masuk
               </span>
             </button>
@@ -4801,21 +4803,21 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('keluar')}
-              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+              className={`min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl transition-all ${
                 activeSection === 'keluar'
                   ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold shadow-2xs'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
               <div className="relative">
-                <ArrowUpRight className="w-5 h-5" />
+                <ArrowUpRight className="w-[18px] h-[18px]" />
                 {outboundReadyList.length > 0 && (
                   <span className="absolute -top-1.5 -right-3 font-mono text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
                     {outboundReadyList.length}
                   </span>
                 )}
               </div>
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 Keluar
               </span>
             </button>
@@ -4824,14 +4826,14 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('rekap')}
-              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+              className={`min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl transition-all ${
                 activeSection === 'rekap' || activeSection === 'spreadsheet'
                   ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <Layers className="w-5 h-5" />
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <Layers className="w-[18px] h-[18px]" />
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 Rekap Stok
               </span>
             </button>
@@ -4840,14 +4842,14 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('riwayat')}
-              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl transition-all ${
+              className={`min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl transition-all ${
                 activeSection === 'riwayat'
                   ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold shadow-2xs'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <History className="w-5 h-5" />
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <History className="w-[18px] h-[18px]" />
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 Riwayat
               </span>
             </button>
@@ -4855,25 +4857,25 @@ export default function App() {
         ) : (
           <nav
             aria-label="Navigasi Utama Mobile Realisasi"
-            className="pointer-events-auto mx-auto max-w-md bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-2 items-center gap-1 p-1.5"
+            className="pointer-events-auto mx-auto max-w-md bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-700/90 rounded-2xl shadow-xl shadow-slate-950/15 grid grid-cols-2 items-center gap-1 p-1"
           >
             <button
               type="button"
               onClick={() =>
                 setActiveSection(selectedModule === 'yantek' ? 'yantek' : 'hvb')
               }
-              className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl font-bold shadow-2xs ${
+              className={`min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl font-bold shadow-2xs ${
                 selectedModule === 'yantek'
                   ? 'bg-orange-50 dark:bg-orange-950/60 text-[#ea580c] dark:text-orange-300'
                   : 'bg-cyan-50 dark:bg-cyan-950/60 text-[#0b4f6c] dark:text-cyan-300'
               }`}
             >
               {selectedModule === 'yantek' ? (
-                <Wrench className="w-5 h-5" />
+                <Wrench className="w-[18px] h-[18px]" />
               ) : (
-                <ClipboardCheck className="w-5 h-5" />
+                <ClipboardCheck className="w-[18px] h-[18px]" />
               )}
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 {selectedModule === 'yantek' ? 'Realisasi Yantek' : 'Realisasi HVB'}
               </span>
             </button>
@@ -4881,10 +4883,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsLoginPageOpen(true)}
-              className="min-h-[46px] flex flex-col items-center justify-center rounded-xl text-[#083d54] dark:text-slate-300 hover:bg-cyan-50/70 dark:hover:text-white transition-all"
+              className="min-h-[44px] py-1 flex flex-col items-center justify-center rounded-xl text-[#083d54] dark:text-slate-300 hover:bg-cyan-50/70 dark:hover:text-white transition-all"
             >
-              <LogOut className="w-5 h-5" />
-              <span className="text-[10px] tracking-tight mt-0.5 whitespace-nowrap">
+              <LogOut className="w-[18px] h-[18px]" />
+              <span className="text-[10px] leading-tight tracking-tight mt-0.5 whitespace-nowrap">
                 Halaman Depan
               </span>
             </button>
@@ -4897,11 +4899,11 @@ export default function App() {
       ====================================================================== */}
       {previewBarcodeRow && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] sm:p-4"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 pb-[calc(env(safe-area-inset-bottom,0px)+68px)] sm:p-4"
           onClick={() => setPreviewBarcodeRow(null)}
         >
           <div
-            className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl sm:rounded-2xl p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl sm:rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl max-h-[82vh] sm:max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sm:hidden pt-1 pb-1">

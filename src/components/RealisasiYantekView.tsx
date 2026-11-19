@@ -585,57 +585,57 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
   return (
     <div className="space-y-4">
       {/* Sub-Menu Realisasi Yantek: Input Yantek, Manajemen Trafo, Sisip Trafo, Riwayat Trafo */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 flex flex-wrap items-center gap-1.5 shadow-xs">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 sm:p-2 grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 shadow-xs">
         <button
           type="button"
           onClick={() => setActiveSubMenu('input')}
-          className={`flex-1 sm:flex-initial min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
             activeSubMenu === 'input'
               ? 'bg-[#083d54] text-[#facc15] shadow-sm'
               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
           <FileText className="w-3.5 h-3.5 shrink-0" />
-          <span>Input Realisasi Yantek</span>
+          <span className="truncate">Input Realisasi Yantek</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubMenu('mutasi')}
-          className={`flex-1 sm:flex-initial min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
             activeSubMenu === 'mutasi'
               ? 'bg-[#0b4f6c] text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
           <Zap className="w-3.5 h-3.5 text-[#ea580c] shrink-0" />
-          <span>Manajemen Trafo</span>
+          <span className="truncate">Manajemen Trafo</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubMenu('sisip')}
-          className={`flex-1 sm:flex-initial min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
             activeSubMenu === 'sisip'
               ? 'bg-purple-600 text-white shadow-sm'
               : 'text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40'
           }`}
         >
           <PlusCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>Sisip Trafo</span>
+          <span className="truncate">Sisip Trafo</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubMenu('riwayat')}
-          className={`flex-1 sm:flex-initial min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
             activeSubMenu === 'riwayat'
               ? 'bg-[#126b82] text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
           <History className="w-3.5 h-3.5 shrink-0" />
-          <span>Riwayat Trafo</span>
+          <span className="truncate">Riwayat Trafo</span>
         </button>
       </div>
 
@@ -1149,7 +1149,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
                 type="submit"
                 disabled={isSubmitting}
                 aria-label="Kirim Laporan"
-                className="w-full sm:w-auto min-w-[180px] min-h-[50px] px-6 py-3 text-xs sm:text-sm font-bold text-white bg-[#ea580c] hover:bg-[#c2410c] disabled:opacity-60 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
+                className="w-full sm:w-auto sm:min-w-[180px] min-h-[50px] px-6 py-3 text-xs sm:text-sm font-bold text-white bg-[#ea580c] hover:bg-[#c2410c] disabled:opacity-60 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
               >
                 {isSubmitting ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
