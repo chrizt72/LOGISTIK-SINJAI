@@ -123,9 +123,9 @@ export default defineConfig(() => {
       }),
       {
         name: 'inject-google-site-verification',
-        transformIndexHtml() {
+        transformIndexHtml(html: string) {
           const token = String(process.env.VITE_GOOGLE_SITE_VERIFICATION || '').trim();
-          if (!token) return [];
+          if (!token || html.includes(`content="${token}"`)) return [];
           return [
             {
               tag: 'meta',
