@@ -84,6 +84,9 @@ import {
   detectBrowserEnvironment,
   FIREBASE_PROJECT_ID,
   OAUTH_CLIENT_ID,
+  getActiveOAuthClientId,
+  setCustomOAuthClientId,
+  hasCustomOAuthClientId,
   FIREBASE_AUTH_DOMAINS_URL,
   GCP_OAUTH_CLIENTS_URL,
   GCP_OAUTH_CONSENT_AUDIENCE_URL,
@@ -288,6 +291,10 @@ export default function App() {
   const [showOAuthTroubleshooting, setShowOAuthTroubleshooting] = useState<boolean>(false);
   const [copiedAuthKey, setCopiedAuthKey] = useState<string | null>(null);
   const [isCheckingServerSession, setIsCheckingServerSession] = useState<boolean>(false);
+  const [customClientIdInput, setCustomClientIdInput] = useState<string>(() =>
+    hasCustomOAuthClientId() ? getActiveOAuthClientId() : ''
+  );
+  const [activeClientId, setActiveClientId] = useState<string>(() => getActiveOAuthClientId());
   const browserEnv = useMemo(() => detectBrowserEnvironment(), []);
   const [connectedSheet, setConnectedSheet] = useState<SpreadsheetMetadata | null>(() => {
     try {
@@ -2291,17 +2298,28 @@ export default function App() {
                       <span>Solusi Error &quot;Kebijakan OAuth 2.0 Google&quot; di HP:</span>
                     </div>
 
+                    {browserEnv.isIOS && browserEnv.isStandalonePwa && (
+                      <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-100 leading-relaxed">
+                        <strong>Pengguna iPhone (PWA Layar Utama):</strong> Safari iOS sering
+                        memblokir popup OAuth di mode Layar Utama. Buka alamat web ini langsung
+                        lewat aplikasi <strong>Safari</strong> untuk login Google.
+                      </div>
+                    )}
+
                     <ol className="list-decimal pl-4 space-y-1.5 leading-relaxed">
                       <li>
-                        <strong>Jangan buka link dari WhatsApp/Telegram langsung:</strong> Gunakan
-                        Chrome (Android) atau Safari (iOS).
+                        <strong>Jangan buka link dari WhatsApp/Telegram/Google App:</strong> Buka
+                        langsung melalui browser <strong>Chrome</strong> (Android) atau{' '}
+                        <strong>Safari</strong> (iPhone).
                       </li>
                       <li>
-                        <strong>Daftarkan Origin Netlify / Domain Aplikasi ke OAuth Client:</strong>{' '}
-                        Salin Origin &amp; Redirect URI di bawah lalu tambahkan ke{' '}
-                        <em>Authorized JavaScript origins</em> dan{' '}
-                        <em>Authorized redirect URIs</em> pada Client ID{' '}
-                        <code className="font-mono break-all">{OAUTH_CLIENT_ID}</code>:
+                        <strong>
+                          Daftarkan Origin &amp; Domain Netlify ke OAuth Client (atau pakai Project
+                          GCP sendiri seperti <code className="font-mono">logistiksinjai</code>):
+                        </strong>{' '}
+                        Pastikan Origin di bawah masuk daftar <em>Authorized JavaScript origins</em>{' '}
+                        Client ID{' '}
+                        <code className="font-mono break-all">{activeClientId}</code>:
                         {browserEnv.currentOrigin && (
                           <div className="mt-1 space-y-1">
                             <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-slate-700">
@@ -2356,12 +2374,51 @@ export default function App() {
                         )}
                       </li>
                       <li>
-                        <strong>Publish OAuth Consent Screen / Tambah Email Petugas:</strong> Jika
-                        status masih <em>Testing</em>, hanya email di <em>Test users</em> yang bisa
-                        login dari HP. Ubah ke <strong>In Production</strong> atau tambahkan Gmail
-                        petugas.
+                        <strong>Publish OAuth Consent Screen / Tambah Email Petugas:</strong> Ubah
+                        Audience ke <strong>In Production</strong> atau tambahkan Gmail petugas ke{' '}
+                        <em>Test users</em>.
                       </li>
                     </ol>
+
+                    {/* Optional Custom OAuth Client ID (untuk Admin yang memakai project GCP pribadi mis. logistiksinjai) */}
+                    <div className="p-2.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-amber-200 dark:border-slate-700 space-y-1.5">
+                      <div className="font-bold text-slate-900 dark:text-slate-100">
+                        Pakai OAuth Client ID Sendiri (Opsional):
+                      </div>
+                      <p className="text-[10px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                        Jika project <code className="font-mono">{FIREBASE_PROJECT_ID}</code> tidak
+                        bisa diedit, buat <strong>OAuth 2.0 Client ID (Web application)</strong> di
+                        project GCP Anda (mis. <code className="font-mono">logistiksinjai</code>),
+                        isi Origin Netlify di atas, lalu tempel Client ID di sini:
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={customClientIdInput}
+                          onChange={(e) => setCustomClientIdInput(e.target.value)}
+                          placeholder="xxxx.apps.googleusercontent.com"
+                          className="flex-1 min-h-[34px] px-2.5 py-1 text-[11px] font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomOAuthClientId(customClientIdInput);
+                            const nextId = getActiveOAuthClientId();
+                            setActiveClientId(nextId);
+                            setInlineBanner({
+                              type: 'success',
+                              title: customClientIdInput.trim()
+                                ? 'OAuth Client ID Kustom Disimpan'
+                                : 'OAuth Client ID Direset ke Default',
+                              message: `Client ID aktif: ${nextId}. Silakan ketuk tombol "Sign in with Google".`,
+                            });
+                          }}
+                          className="min-h-[34px] px-2.5 py-1 text-[10px] font-bold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-lg shrink-0"
+                        >
+                          Simpan
+                        </button>
+                      </div>
+                    </div>
 
                     <div className="grid grid-cols-1 gap-1.5 pt-1">
                       <a
@@ -2483,7 +2540,119 @@ export default function App() {
               )}
             </button>
           </div>
+
+          <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-400">
+            <a
+              href="/privacy.html"
+              className="font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline"
+            >
+              Privacy Policy / Kebijakan Privasi
+            </a>
+            <span aria-hidden="true">·</span>
+            <a
+              href="/terms.html"
+              className="font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline"
+            >
+              Terms of Service
+            </a>
+          </div>
         </div>
+
+        {/* Public Application Overview & Data Transparency Section (Visible Without Login) */}
+        <section
+          aria-label="Application Information and Google API Data Usage"
+          className="w-full max-w-3xl mx-auto mt-8 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-white/30 dark:border-cyan-800/60 rounded-3xl p-6 sm:p-8 shadow-xl shadow-[#04212e]/30 space-y-6"
+        >
+          <div className="space-y-2">
+            <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#0b4f6c] dark:text-[#facc15]">
+              Public Application Information · Informasi Aplikasi
+            </div>
+            <h2 className="text-xl font-bold text-[#083d54] dark:text-white">
+              Tentang SINJAI BENDERANG — PLN UP3 Bulukumba ULP Sinjai
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              <strong>SINJAI BENDERANG</strong> is an operational warehouse &amp; field technical
+              monitoring web application for <strong>PLN UP3 Bulukumba — ULP Sinjai</strong>. It
+              helps authorized officers track material inventory, record Yantek &amp; HVB field
+              work realizations, manage distribution transformer (Trafo) mutations/insertions, and
+              synchronize records to their own Google Sheets.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-3.5 rounded-2xl bg-[#f2f7f9] dark:bg-slate-800/70 border border-cyan-900/10 dark:border-slate-700 space-y-1">
+              <div className="font-bold text-[#083d54] dark:text-cyan-200 flex items-center gap-1.5">
+                <Package className="w-4 h-4 text-[#0b4f6c] dark:text-[#facc15] shrink-0" />
+                <span>Logistik Material</span>
+              </div>
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                QR/barcode scanning for inbound and outbound kWh meter stock, duplicate prevention,
+                and real-time warehouse balance recapitulation.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#f2f7f9] dark:bg-slate-800/70 border border-cyan-900/10 dark:border-slate-700 space-y-1">
+              <div className="font-bold text-[#083d54] dark:text-cyan-200 flex items-center gap-1.5">
+                <Wrench className="w-4 h-4 text-[#ea580c] shrink-0" />
+                <span>Realisasi Yantek &amp; HVB</span>
+              </div>
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                Field work realization reporting by feeder, keypoint, segment, WO/P0 volume, and GPS
+                coordinates synced directly to authorized spreadsheets.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#f2f7f9] dark:bg-slate-800/70 border border-cyan-900/10 dark:border-slate-700 space-y-1">
+              <div className="font-bold text-[#083d54] dark:text-cyan-200 flex items-center gap-1.5">
+                <ClipboardCheck className="w-4 h-4 text-[#126b82] dark:text-[#facc15] shrink-0" />
+                <span>Manajemen Trafo</span>
+              </div>
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                Substation transformer mutation and insertion registry with official PDF Berita
+                Acara generation and spreadsheet logging.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-cyan-50/80 dark:bg-cyan-950/30 border border-cyan-200 dark:border-cyan-800/70 space-y-1.5 text-xs">
+            <div className="font-bold text-[#083d54] dark:text-cyan-100">
+              Google Workspace OAuth &amp; Data Usage Transparency
+            </div>
+            <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+              When you choose to sign in with Google, SINJAI BENDERANG requests Google profile,
+              Google Drive, and Google Sheets permissions solely to locate, read, and update the
+              operational spreadsheets authorized by you. OAuth access tokens remain strictly in
+              active browser session memory, are never sold or shared with third parties, and comply
+              with the Google API Services User Data Policy (Limited Use).
+            </p>
+          </div>
+
+          <footer className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+            <div>
+              &copy; 2026 SINJAI BENDERANG · PLN UP3 Bulukumba ULP Sinjai · Contact:{' '}
+              <a
+                href="mailto:chrizt72@gmail.com"
+                className="font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline"
+              >
+                chrizt72@gmail.com
+              </a>
+            </div>
+            <div className="flex items-center gap-4">
+              <a
+                href="/privacy.html"
+                className="font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline"
+              >
+                Privacy Policy
+              </a>
+              <a
+                href="/terms.html"
+                className="font-semibold text-[#0b4f6c] dark:text-cyan-300 hover:underline"
+              >
+                Terms of Service
+              </a>
+            </div>
+          </footer>
+        </section>
       </div>
     );
   }

@@ -18,6 +18,8 @@ export default defineConfig(() => {
           'pwa-192x192.png',
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
+          'privacy.html',
+          'terms.html',
         ],
         manifest: {
           id: '/',
@@ -62,7 +64,12 @@ export default defineConfig(() => {
             'assets/aistudio/MASTER_GARDU_*',
           ],
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallbackDenylist: [
+            /^\/api\//,
+            /^\/privacy/,
+            /^\/terms/,
+            /^\/google[a-z0-9_-]+\.html/i,
+          ],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -114,6 +121,23 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
+      {
+        name: 'inject-google-site-verification',
+        transformIndexHtml() {
+          const token = String(process.env.VITE_GOOGLE_SITE_VERIFICATION || '').trim();
+          if (!token) return [];
+          return [
+            {
+              tag: 'meta',
+              attrs: {
+                name: 'google-site-verification',
+                content: token,
+              },
+              injectTo: 'head',
+            },
+          ];
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

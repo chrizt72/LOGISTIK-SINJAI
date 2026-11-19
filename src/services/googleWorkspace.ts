@@ -157,7 +157,55 @@ declare global {
 }
 
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0123226455';
-export const OAUTH_CLIENT_ID = firebaseConfig.oAuthClientId || '';
+export const DEFAULT_OAUTH_CLIENT_ID = firebaseConfig.oAuthClientId || '';
+export const OAUTH_CLIENT_ID = DEFAULT_OAUTH_CLIENT_ID;
+const CUSTOM_OAUTH_CLIENT_STORAGE_KEY = 'sinjai_custom_oauth_client_id_v1';
+
+export function getActiveOAuthClientId(): string {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem(CUSTOM_OAUTH_CLIENT_STORAGE_KEY)?.trim();
+      if (saved && saved.endsWith('.apps.googleusercontent.com')) {
+        return saved;
+      }
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  const envClientId =
+    typeof import.meta !== 'undefined'
+      ? String((import.meta as any).env?.VITE_GOOGLE_OAUTH_CLIENT_ID || '').trim()
+      : '';
+  if (envClientId) return envClientId;
+  return DEFAULT_OAUTH_CLIENT_ID;
+}
+
+export function hasCustomOAuthClientId(): boolean {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return Boolean(window.localStorage.getItem(CUSTOM_OAUTH_CLIENT_STORAGE_KEY)?.trim());
+    }
+  } catch {
+    // Ignore storage error
+  }
+  return false;
+}
+
+export function setCustomOAuthClientId(clientId: string): void {
+  const cleaned = clientId.trim();
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      if (!cleaned) {
+        window.localStorage.removeItem(CUSTOM_OAUTH_CLIENT_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(CUSTOM_OAUTH_CLIENT_STORAGE_KEY, cleaned);
+      }
+    }
+  } catch {
+    // Ignore storage write error
+  }
+}
+
 export const FIREBASE_AUTH_DOMAINS_URL = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`;
 export const GCP_OAUTH_CLIENTS_URL = `https://console.cloud.google.com/apis/credentials?project=${FIREBASE_PROJECT_ID}`;
 export const GCP_OAUTH_CONSENT_AUDIENCE_URL = `https://console.cloud.google.com/auth/audience?project=${FIREBASE_PROJECT_ID}`;
@@ -205,8 +253,12 @@ export function detectBrowserEnvironment(): BrowserEnvironmentInfo {
   else if (/FBAN|FBAV|FB_IAB/i.test(ua)) inAppName = 'Facebook';
   else if (/Line\//i.test(ua)) inAppName = 'LINE';
   else if (/BytedanceWebview|TikTok|Musical_ly/i.test(ua)) inAppName = 'TikTok';
-  else if (/\bwv\b|; wv\)/i.test(ua)) inAppName = 'Browser Dalam Aplikasi (WebView)';
-  else if (isIOS && !isStandalonePwa && !/Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua)) {
+  else if (/GSA\//i.test(ua)) inAppName = 'Google App (WebView)';
+  else if (/Twitter|LinkedInApp|MicroMessenger/i.test(ua)) {
+    inAppName = 'Browser Dalam Aplikasi';
+  } else if (/\bwv\b|; wv\)/i.test(ua)) {
+    inAppName = 'Browser Dalam Aplikasi (WebView)';
+  } else if (isIOS && !isStandalonePwa && !/Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua)) {
     inAppName = 'Browser Dalam Aplikasi (iOS WebView)';
   }
 
@@ -272,9 +324,10 @@ function buildOAuthPolicyError(rawDetail?: string): Error {
     return err;
   }
 
+  const activeClientId = getActiveOAuthClientId();
   const detailText = rawDetail ? ` (${rawDetail})` : '';
   const err: any = new Error(
-    `Akses diblokir kebijakan OAuth 2.0 Google${detailText}. Pastikan Origin "${env.currentOrigin || env.currentHostname}" sudah didaftarkan pada Google Cloud Console → Authorized JavaScript origins & Firebase Authorized domains, serta OAuth Consent Screen sudah dipublish atau email petugas masuk daftar Test users.`
+    `Akses diblokir kebijakan OAuth 2.0 Google${detailText}. Pastikan Origin "${env.currentOrigin || env.currentHostname}" terdaftar pada Authorized JavaScript origins Client ID (${activeClientId}) & Firebase Authorized domains, atau gunakan OAuth Client ID dari project GCP Anda sendiri (mis. logistiksinjai).`
   );
   err.code = 'oauth/policy-blocked';
   err.currentOrigin = env.currentOrigin;
@@ -322,7 +375,7 @@ export const signInWithGoogleIdentityServices = (
     }
 
     const oauth2 = window.google?.accounts?.oauth2;
-    const clientId = firebaseConfig.oAuthClientId;
+    const clientId = getActiveOAuthClientId();
 
     if (!oauth2 || !clientId) {
       reject(
@@ -370,7 +423,7 @@ export const signInWithGoogleIdentityServices = (
         if (errType === 'popup_failed_to_open') {
           reject(
             new Error(
-              'Jendela login Google diblokir oleh browser mobile. Izinkan pop-up pada browser Chrome/Safari atau gunakan "Cek Sesi Server Admin" jika Admin sudah login.'
+              'Jendela login Google diblokir oleh browser mobile. Izinkan pop-up pada browser Chrome/Safari atau buka langsung di browser Chrome/Safari.'
             )
           );
           return;
@@ -481,34 +534,28 @@ export const googleSignIn = async (): Promise<{
 } | null> => {
   const env = detectBrowserEnvironment();
 
-  // If on mobile or standalone PWA and Google Identity Services is ready, invoke GIS synchronously
-  // to preserve user-click gesture and avoid cross-origin Firebase popup blockers on mobile.
-  if ((env.isMobile || env.isStandalonePwa) && !env.isInAppBrowser && window.google?.accounts?.oauth2) {
-    try {
-      isSigningIn = true;
-      return await signInWithGoogleIdentityServices('select_account');
-    } catch (gisErr: any) {
-      isSigningIn = false;
-      const msg = String(gisErr?.message || '');
-      if (msg.includes('popup-closed-by-user')) {
-        return null;
-      }
-      const existingServerSession = await refreshServerOAuthSession();
-      if (existingServerSession) {
-        return existingServerSession;
-      }
-      throw gisErr;
-    } finally {
-      isSigningIn = false;
-    }
-  }
-
   if (env.isInAppBrowser) {
     const existingServerSession = await refreshServerOAuthSession();
     if (existingServerSession) {
       return existingServerSession;
     }
     throw buildOAuthPolicyError('disallowed_useragent');
+  }
+
+  // If a custom OAuth Client ID was explicitly configured (e.g. from user's own GCP project / Netlify),
+  // use GIS directly with that Client ID so mobile & desktop share the user's configured OAuth Client.
+  if (hasCustomOAuthClientId() || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GOOGLE_OAUTH_CLIENT_ID)) {
+    try {
+      isSigningIn = true;
+      return await signInWithGoogleIdentityServices('select_account');
+    } catch (gisErr: any) {
+      if (String(gisErr?.message || '').includes('popup-closed-by-user')) {
+        return null;
+      }
+      throw gisErr;
+    } finally {
+      isSigningIn = false;
+    }
   }
 
   try {
