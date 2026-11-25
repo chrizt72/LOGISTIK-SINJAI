@@ -1,5 +1,9 @@
 import { jsPDF } from 'jspdf';
 import { YantekRealisasiReport, HvbRealisasiReport } from '../types/warehouse';
+import {
+  formatPemeliharaanKms,
+  getRealisasiPemeliharaanDetails,
+} from './pemeliharaanCalculation';
 
 export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   const doc = new jsPDF({
@@ -157,7 +161,11 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
     y = 20;
   }
 
-  // Section 3: Titik Koordinat & Realisasi WO / P0
+  // Section 3: Titik Koordinat & Realisasi WO / P0 / Realisasi Pemeliharaan
+  const yantekPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList).realisasiPemeliharaanKms;
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(15, 23, 42);
@@ -166,7 +174,7 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   y += 4;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, y, pageWidth - 28, 28, 'FD');
+  doc.rect(14, y, pageWidth - 28, 34, 'FD');
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
@@ -174,6 +182,7 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   doc.text('Titik Koordinat Awal', 18, y + 7);
   doc.text('Titik Koordinat Akhir', 18, y + 14);
   doc.text('Jumlah Realisasi WO / P0', 18, y + 21);
+  doc.text('Realisasi Pemeliharaan', 18, y + 28);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
@@ -184,8 +193,10 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
     62,
     y + 21
   );
+  doc.setTextColor(6, 95, 70);
+  doc.text(`: ${formatPemeliharaanKms(yantekPemeliharaanKms)} KMS`, 62, y + 28);
 
-  y += 38;
+  y += 44;
 
   // Footer Signature
   doc.setFont('helvetica', 'normal');
@@ -225,6 +236,9 @@ export function buildYantekWhatsAppText(report: YantekRealisasiReport): string {
   const pekerjaanLines = report.pekerjaanList
     .map((p, idx) => `   ${idx + 1}. ${p.detailPekerjaan} — *Volume: ${p.volume}*`)
     .join('\n');
+  const realisasiPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList).realisasiPemeliharaanKms;
 
   return [
     `*LAPORAN REALISASI HARIAN PEKERJAAN YANTEK*`,
@@ -242,6 +256,7 @@ export function buildYantekWhatsAppText(report: YantekRealisasiReport): string {
     `*Detail Pekerjaan & Volume:*`,
     pekerjaanLines,
     `----------------------------------------`,
+    `• *Realisasi Pemeliharaan:* ${formatPemeliharaanKms(realisasiPemeliharaanKms)} KMS`,
     `• *Titik Koordinat Awal:* ${report.koordinatAwal}`,
     `• *Titik Koordinat Akhir:* ${report.koordinatAkhir}`,
     `• *Jumlah Realisasi WO:* ${report.realisasiWo}`,
@@ -450,29 +465,36 @@ export function buildHvbPdfDocument(report: HvbRealisasiReport): jsPDF {
     y = 20;
   }
 
-  // Section 3: Titik Koordinat Lokasi
+  // Section 3: Titik Koordinat Lokasi & Realisasi Pemeliharaan
+  const hvbPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList).realisasiPemeliharaanKms;
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('3. TITIK KOORDINAT LOKASI PEKERJAAN HVB', 14, y);
+  doc.text('3. TITIK KOORDINAT LOKASI & REALISASI PEMELIHARAAN HVB', 14, y);
 
   y += 4;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, y, pageWidth - 28, 20, 'FD');
+  doc.rect(14, y, pageWidth - 28, 27, 'FD');
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
   doc.text('Titik Koordinat Awal', 18, y + 7);
   doc.text('Titik Koordinat Akhir', 18, y + 14);
+  doc.text('Realisasi Pemeliharaan', 18, y + 21);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text(`: ${report.koordinatAwal}`, 62, y + 7);
   doc.text(`: ${report.koordinatAkhir}`, 62, y + 14);
+  doc.setTextColor(6, 95, 70);
+  doc.text(`: ${formatPemeliharaanKms(hvbPemeliharaanKms)} KMS`, 62, y + 21);
 
-  y += 30;
+  y += 37;
 
   // Footer Signature
   doc.setFont('helvetica', 'normal');
@@ -512,6 +534,9 @@ export function buildHvbWhatsAppText(report: HvbRealisasiReport): string {
   const pekerjaanLines = report.pekerjaanList
     .map((p, idx) => `   ${idx + 1}. ${p.detailPekerjaan} — *Volume: ${p.volume}*`)
     .join('\n');
+  const realisasiPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList).realisasiPemeliharaanKms;
 
   return [
     `*LAPORAN REALISASI HARIAN HAR VOLUME BASED (HVB)*`,
@@ -528,6 +553,7 @@ export function buildHvbWhatsAppText(report: HvbRealisasiReport): string {
     `*Detail Pekerjaan & Volume:*`,
     pekerjaanLines,
     `----------------------------------------`,
+    `• *Realisasi Pemeliharaan:* ${formatPemeliharaanKms(realisasiPemeliharaanKms)} KMS`,
     `• *Titik Koordinat Awal:* ${report.koordinatAwal}`,
     `• *Titik Koordinat Akhir:* ${report.koordinatAkhir}`,
     `• *Status Spreadsheet:* Tersimpan ke Sheet HVB (gid=1954293988)`,

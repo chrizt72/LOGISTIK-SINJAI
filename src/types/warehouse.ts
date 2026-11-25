@@ -133,6 +133,7 @@ export interface YantekRealisasiReport {
   koordinatAkhir: string;
   realisasiWo: number;
   realisasiP0: number;
+  realisasiPemeliharaanKms?: number;
   petugasPelapor?: string;
 }
 
@@ -157,6 +158,7 @@ export interface HvbRealisasiReport {
   pekerjaanList: YantekWorkItemInput[];
   koordinatAwal: string;
   koordinatAkhir: string;
+  realisasiPemeliharaanKms?: number;
   petugasPelapor?: string;
 }
 

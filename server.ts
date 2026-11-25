@@ -18,6 +18,10 @@ import {
   parseTeknikSinjaiCsv,
   DEFAULT_TEKNIK_SINJAI_DATA,
 } from './src/data/teknikSinjaiDatabase.ts';
+import {
+  formatPemeliharaanKms,
+  getRealisasiPemeliharaanDetails,
+} from './src/utils/pemeliharaanCalculation.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -337,13 +341,16 @@ function escapeCsvCell(val: string | number): string {
 
 function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
   const header =
-    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (UNIT),NAMA PETUGAS,PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,JUMLAH REALISASI WO,JUMLAH REALISASI P0,STATUS LAPORAN';
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (UNIT),NAMA PETUGAS,PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,JUMLAH REALISASI WO,JUMLAH REALISASI P0,REALISASI PEMELIHARAAN (KMS),STATUS LAPORAN';
   const lines = [header];
   for (const r of reports) {
     const items =
       r.pekerjaanList.length > 0
         ? r.pekerjaanList
         : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
+    const realisasiPemeliharaanKms =
+      r.realisasiPemeliharaanKms ??
+      getRealisasiPemeliharaanDetails(r.pekerjaanList || []).realisasiPemeliharaanKms;
 
     for (const item of items) {
       lines.push(
@@ -362,6 +369,7 @@ function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
           escapeCsvCell(r.koordinatAkhir),
           escapeCsvCell(r.realisasiWo),
           escapeCsvCell(r.realisasiP0),
+          escapeCsvCell(formatPemeliharaanKms(realisasiPemeliharaanKms)),
           'SELESAI',
         ].join(',')
       );
@@ -372,13 +380,16 @@ function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
 
 function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
   const header =
-    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (HVB),PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,STATUS LAPORAN';
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (HVB),PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,REALISASI PEMELIHARAAN (KMS),STATUS LAPORAN';
   const lines = [header];
   for (const r of reports) {
     const items =
       r.pekerjaanList.length > 0
         ? r.pekerjaanList
         : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
+    const realisasiPemeliharaanKms =
+      r.realisasiPemeliharaanKms ??
+      getRealisasiPemeliharaanDetails(r.pekerjaanList || []).realisasiPemeliharaanKms;
 
     for (const item of items) {
       lines.push(
@@ -394,6 +405,7 @@ function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
           escapeCsvCell(item.volume),
           escapeCsvCell(r.koordinatAwal),
           escapeCsvCell(r.koordinatAkhir),
+          escapeCsvCell(formatPemeliharaanKms(realisasiPemeliharaanKms)),
           'SELESAI',
         ].join(',')
       );
@@ -751,6 +763,7 @@ async function startServer() {
       });
     }
 
+    const pemeliharaanSummary = getRealisasiPemeliharaanDetails(sanitizedPekerjaan);
     const newReport: YantekRealisasiReport = {
       id: `YNTK-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       reportRowNumber: warehouseState.yantekReports.length + 2,
@@ -767,6 +780,7 @@ async function startServer() {
       koordinatAkhir: cleanAkhir,
       realisasiWo: Number(realisasiWo) || 0,
       realisasiP0: Number(realisasiP0) || 0,
+      realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
     };
 
     warehouseState.yantekReports.unshift(newReport);
@@ -893,6 +907,7 @@ async function startServer() {
       });
     }
 
+    const pemeliharaanSummary = getRealisasiPemeliharaanDetails(sanitizedPekerjaan);
     const newReport: HvbRealisasiReport = {
       id: `HVB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       reportRowNumber: warehouseState.hvbReports.length + 2,
@@ -906,6 +921,7 @@ async function startServer() {
       pekerjaanList: sanitizedPekerjaan,
       koordinatAwal: cleanAwal,
       koordinatAkhir: cleanAkhir,
+      realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
     };
 
     warehouseState.hvbReports.unshift(newReport);

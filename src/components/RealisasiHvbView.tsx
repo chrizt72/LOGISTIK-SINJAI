@@ -38,6 +38,10 @@ import {
   downloadHvbReportPdf,
   shareHvbReportViaWhatsApp,
 } from '../utils/yantekPdfExport';
+import {
+  formatPemeliharaanKms,
+  getRealisasiPemeliharaanDetails,
+} from '../utils/pemeliharaanCalculation';
 
 interface RealisasiHvbViewProps {
   segments: YantekDatabaseSegment[];
@@ -478,6 +482,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
     setIsSubmitting(true);
     try {
+      const pemeliharaanSummary = getRealisasiPemeliharaanDetails(finalPekerjaanList);
       const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
       let savedReport: HvbRealisasiReport = {
         id: `HVB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -492,6 +497,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
         pekerjaanList: finalPekerjaanList,
         koordinatAwal: koordinatAwal.trim(),
         koordinatAkhir: koordinatAkhir.trim(),
+        realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
       };
       let updatedReports: HvbRealisasiReport[] = [savedReport, ...reports];
 
@@ -509,6 +515,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
             pekerjaanList: finalPekerjaanList,
             koordinatAwal: koordinatAwal.trim(),
             koordinatAkhir: koordinatAkhir.trim(),
+            realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
           }),
         });
 
@@ -926,7 +933,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
                 <input
                   ref={volumeInputRef}
                   type="number"
-                  min="1"
+                  min="0.01"
                   step="any"
                   value={volumeInput}
                   onChange={(e) => setVolumeInput(e.target.value)}
@@ -1168,58 +1175,83 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
       )}
 
       {/* POP UP 2: DATA BERHASIL DIKIRIM */}
-      {completedReportModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-4"
-          onClick={() => setCompletedReportModal(null)}
-        >
-          <div
-            className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-600">
-                  <CheckCircle2 className="w-5 h-5 shrink-0" />
-                </div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white font-display">
-                  Data Berhasil Dikirim
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCompletedReportModal(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {completedReportModal &&
+        (() => {
+          const pemeliharaanDetails = getRealisasiPemeliharaanDetails(
+            completedReportModal.pekerjaanList
+          );
+          const totalPemeliharaanKms =
+            completedReportModal.realisasiPemeliharaanKms ??
+            pemeliharaanDetails.realisasiPemeliharaanKms;
 
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
-              <div className="font-mono font-bold text-slate-900 dark:text-white">
-                {completedReportModal.unitPelaksana} · {completedReportModal.segment}
-              </div>
-              <div className="font-mono text-[11px] text-slate-600 dark:text-slate-300">
-                Penyulang: {completedReportModal.penyulang} · Keypoint:{' '}
-                {completedReportModal.keypoint}
-              </div>
-              <div className="pt-1 border-t border-slate-200 dark:border-slate-700 space-y-1">
-                {completedReportModal.pekerjaanList.map((item, i) => (
-                  <div key={item.id} className="flex items-center justify-between font-mono">
-                    <span>
-                      {i + 1}. {item.detailPekerjaan}
-                    </span>
-                    <span className="font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                      Vol: {item.volume}
-                    </span>
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 sm:p-4 pb-[calc(env(safe-area-inset-bottom,0px)+5.5rem)] sm:pb-4"
+              onClick={() => setCompletedReportModal(null)}
+            >
+              <div
+                className="w-full max-w-lg max-h-[calc(100vh-7rem)] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-4 sm:p-5 space-y-4"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-600">
+                      <CheckCircle2 className="w-5 h-5 shrink-0" />
+                    </div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white font-display">
+                      Data Berhasil Dikirim
+                    </h3>
                   </div>
-                ))}
-              </div>
-              <div className="pt-1 border-t border-slate-200 dark:border-slate-700 font-mono text-[11px] text-slate-500">
-                Koordinat: {completedReportModal.koordinatAwal} s/d{' '}
-                {completedReportModal.koordinatAkhir}
-              </div>
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => setCompletedReportModal(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+                  <div className="font-mono font-bold text-slate-900 dark:text-white">
+                    {completedReportModal.unitPelaksana} · {completedReportModal.segment}
+                  </div>
+                  <div className="font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                    Penyulang: {completedReportModal.penyulang} · Keypoint:{' '}
+                    {completedReportModal.keypoint}
+                  </div>
+                  <div className="pt-1 border-t border-slate-200 dark:border-slate-700 space-y-1">
+                    {completedReportModal.pekerjaanList.map((item, i) => (
+                      <div key={item.id} className="flex items-center justify-between gap-2 font-mono">
+                        <span className="min-w-0 break-words">
+                          {i + 1}. {item.detailPekerjaan}
+                        </span>
+                        <span className="font-bold text-emerald-700 dark:text-emerald-400 tabular-nums shrink-0">
+                          Vol: {item.volume}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Kolom Realisasi Pemeliharaan (KMS) */}
+                  <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-800 dark:text-slate-100">
+                        Realisasi Pemeliharaan
+                      </span>
+                      <span className="font-mono text-sm font-extrabold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                        {formatPemeliharaanKms(totalPemeliharaanKms)} KMS
+                      </span>
+                    </div>
+                    <div className="font-mono text-[10px] text-emerald-800/80 dark:text-emerald-300/80 tabular-nums">
+                      (Perampalan Pohon: {formatPemeliharaanKms(pemeliharaanDetails.volumePerampalan)} + Penebangan Pohon: {formatPemeliharaanKms(pemeliharaanDetails.volumePenebangan)}) × 0,1 = {formatPemeliharaanKms(totalPemeliharaanKms)} KMS
+                    </div>
+                  </div>
+
+                  <div className="pt-1 border-t border-slate-200 dark:border-slate-700 font-mono text-[11px] text-slate-500">
+                    Koordinat: {completedReportModal.koordinatAwal} s/d{' '}
+                    {completedReportModal.koordinatAkhir}
+                  </div>
+                </div>
 
             {sheetSyncWarning && (
               <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 space-y-2.5 text-xs">
@@ -1274,9 +1306,10 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
                 Tutup
               </button>
             </div>
+            </div>
           </div>
-        </div>
-      )}
+          );
+        })()}
         </>
       )}
     </div>

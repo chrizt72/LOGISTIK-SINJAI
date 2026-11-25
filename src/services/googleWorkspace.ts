@@ -17,6 +17,10 @@ import {
   TrafoManagementRecord,
 } from '../types/warehouse';
 import { DEFAULT_TEKNIK_SINJAI_DATA } from '../data/teknikSinjaiDatabase';
+import {
+  formatPemeliharaanKms,
+  getRealisasiPemeliharaanDetails,
+} from '../utils/pemeliharaanCalculation';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/drive',
@@ -2434,6 +2438,7 @@ export const YANTEK_SHEET_HEADERS = [
   'TITIK KOORDINAT AKHIR',
   'JUMLAH REALISASI WO',
   'JUMLAH REALISASI P0',
+  'REALISASI PEMELIHARAAN (KMS)',
   'STATUS LAPORAN',
 ];
 
@@ -2449,6 +2454,7 @@ export const HVB_SHEET_HEADERS = [
   'VOLUME PEKERJAAN',
   'TITIK KOORDINAT AWAL',
   'TITIK KOORDINAT AKHIR',
+  'REALISASI PEMELIHARAAN (KMS)',
   'STATUS LAPORAN',
 ];
 
@@ -2476,6 +2482,11 @@ export function yantekReportToSheetRows(report: YantekRealisasiReport): string[]
       ? uniqueItems
       : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
 
+  const realisasiPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList || []).realisasiPemeliharaanKms;
+  const formattedPemeliharaanKms = formatPemeliharaanKms(realisasiPemeliharaanKms);
+
   return items.map((item) => [
     formatSheetTextDateCell(report.timestampLaporan, true),
     formatSheetTextDateCell(report.tanggalLaporan, false),
@@ -2491,6 +2502,7 @@ export function yantekReportToSheetRows(report: YantekRealisasiReport): string[]
     report.koordinatAkhir,
     String(report.realisasiWo),
     String(report.realisasiP0),
+    formattedPemeliharaanKms,
     'SELESAI',
   ]);
 }
@@ -2509,6 +2521,11 @@ export function hvbReportToSheetRows(report: HvbRealisasiReport): string[][] {
       ? uniqueItems
       : [{ id: '1', detailPekerjaan: '-', volume: 0 }];
 
+  const realisasiPemeliharaanKms =
+    report.realisasiPemeliharaanKms ??
+    getRealisasiPemeliharaanDetails(report.pekerjaanList || []).realisasiPemeliharaanKms;
+  const formattedPemeliharaanKms = formatPemeliharaanKms(realisasiPemeliharaanKms);
+
   return items.map((item) => [
     formatSheetTextDateCell(report.timestampLaporan, true),
     formatSheetTextDateCell(report.tanggalLaporan, false),
@@ -2521,6 +2538,7 @@ export function hvbReportToSheetRows(report: HvbRealisasiReport): string[][] {
     String(item.volume),
     report.koordinatAwal,
     report.koordinatAkhir,
+    formattedPemeliharaanKms,
     'SELESAI',
   ]);
 }
@@ -2688,14 +2706,18 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         const isGenericTitle = /^(SHEET\s*\d+|LEMBAR\s*\d+)$/i.test(yantekSheet.title.trim());
         const canRenameToYantek = isGenericTitle && !usedTitlesUpper.has('YANTEK');
         const needsGridExpand =
-          (yantekSheet.rowCount || 0) < 500 || (yantekSheet.columnCount || 0) < 15;
+          (yantekSheet.rowCount || 0) < 500 ||
+          (yantekSheet.columnCount || 0) < YANTEK_SHEET_HEADERS.length;
 
         if (canRenameToYantek || needsGridExpand) {
           const props: any = {
             sheetId: yantekSheet.sheetId,
             gridProperties: {
               rowCount: Math.max(yantekSheet.rowCount || 0, 1500),
-              columnCount: Math.max(yantekSheet.columnCount || 0, 15),
+              columnCount: Math.max(
+                yantekSheet.columnCount || 0,
+                YANTEK_SHEET_HEADERS.length
+              ),
               frozenRowCount: 1,
             },
           };
@@ -2732,7 +2754,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
           title: 'YANTEK',
           gridProperties: {
             rowCount: 1500,
-            columnCount: 15,
+            columnCount: YANTEK_SHEET_HEADERS.length,
             frozenRowCount: 1,
           },
         };
@@ -2774,7 +2796,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                         title: 'YANTEK',
                         gridProperties: {
                           rowCount: 1500,
-                          columnCount: 15,
+                          columnCount: YANTEK_SHEET_HEADERS.length,
                           frozenRowCount: 1,
                         },
                       },
@@ -2816,14 +2838,15 @@ export async function ensureAndFormatTeknikSinjaiSheets(
           const isGenericTitle = /^(SHEET\s*\d+|LEMBAR\s*\d+)$/i.test(hvbSheet.title.trim());
           const canRenameToHvb = isGenericTitle && !usedTitlesUpper.has('HVB');
           const needsGridExpand =
-            (hvbSheet.rowCount || 0) < 500 || (hvbSheet.columnCount || 0) < 12;
+            (hvbSheet.rowCount || 0) < 500 ||
+            (hvbSheet.columnCount || 0) < HVB_SHEET_HEADERS.length;
 
           if (canRenameToHvb || needsGridExpand) {
             const props: any = {
               sheetId: hvbSheet.sheetId,
               gridProperties: {
                 rowCount: Math.max(hvbSheet.rowCount || 0, 1500),
-                columnCount: Math.max(hvbSheet.columnCount || 0, 12),
+                columnCount: Math.max(hvbSheet.columnCount || 0, HVB_SHEET_HEADERS.length),
                 frozenRowCount: 1,
               },
             };
@@ -2862,7 +2885,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
             title: 'HVB',
             gridProperties: {
               rowCount: 1500,
-              columnCount: 12,
+              columnCount: HVB_SHEET_HEADERS.length,
               frozenRowCount: 1,
             },
           };
@@ -2904,7 +2927,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                           title: 'HVB',
                           gridProperties: {
                             rowCount: 1500,
-                            columnCount: 12,
+                            columnCount: HVB_SHEET_HEADERS.length,
                             frozenRowCount: 1,
                           },
                         },
@@ -3038,6 +3061,14 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         if (yantekReadRes.ok) {
           const yantekData = await yantekReadRes.json().catch(() => ({}));
           const rawVals: string[][] = Array.isArray(yantekData.values) ? yantekData.values : [];
+          const headerRow = (rawVals[0] || []).map((cell) =>
+            String(cell || '').trim().toUpperCase()
+          );
+          const headerPemeliharaanIdx = headerRow.findIndex((h) =>
+            h.includes('REALISASI PEMELIHARAAN')
+          );
+          const headerStatusIdx = headerRow.findIndex((h) => h.includes('STATUS'));
+
           for (let i = 0; i < rawVals.length; i++) {
             const row = rawVals[i] || [];
             const colA = String(row[0] || '').trim().toUpperCase();
@@ -3054,8 +3085,30 @@ export async function ensureAndFormatTeknikSinjaiSheets(
             ) {
               continue;
             }
+
             const normalizedRow: string[] =
-              row.length >= 16
+              headerPemeliharaanIdx >= 0
+                ? [
+                    formatSheetTextDateCell(row[0], true),
+                    formatSheetTextDateCell(row[1], false),
+                    String(row[2] ?? ''),
+                    String(row[3] ?? ''),
+                    String(row[4] ?? ''),
+                    String(row[5] ?? ''),
+                    String(row[6] ?? ''),
+                    String(row[7] ?? ''),
+                    String(row[8] ?? ''),
+                    String(row[9] ?? ''),
+                    String(row[10] ?? ''),
+                    String(row[11] ?? ''),
+                    String(row[12] ?? ''),
+                    String(row[13] ?? ''),
+                    String(row[headerPemeliharaanIdx] ?? ''),
+                    String(
+                      (headerStatusIdx >= 0 ? row[headerStatusIdx] : row[15]) || 'SELESAI'
+                    ),
+                  ]
+                : row.length >= 16
                 ? [
                     formatSheetTextDateCell(row[0], true),
                     formatSheetTextDateCell(row[1], false),
@@ -3071,13 +3124,27 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                     String(row[12] ?? ''),
                     String(row[13] ?? ''),
                     String(row[14] ?? ''),
+                    '',
                     String(row[16] || 'SELESAI'),
                   ]
-                : Array.from({ length: 15 }, (_, idx) => {
-                    if (idx === 0) return formatSheetTextDateCell(row[0], true);
-                    if (idx === 1) return formatSheetTextDateCell(row[1], false);
-                    return String(row[idx] ?? (idx === 14 ? 'SELESAI' : ''));
-                  });
+                : [
+                    formatSheetTextDateCell(row[0], true),
+                    formatSheetTextDateCell(row[1], false),
+                    String(row[2] ?? ''),
+                    String(row[3] ?? ''),
+                    String(row[4] ?? ''),
+                    String(row[5] ?? ''),
+                    String(row[6] ?? ''),
+                    String(row[7] ?? ''),
+                    String(row[8] ?? ''),
+                    String(row[9] ?? ''),
+                    String(row[10] ?? ''),
+                    String(row[11] ?? ''),
+                    String(row[12] ?? ''),
+                    String(row[13] ?? ''),
+                    '',
+                    String(row[14] || 'SELESAI'),
+                  ];
 
             const tsKey = makeYantekTsKey(normalizedRow);
             const contentKey = makeYantekContentKey(normalizedRow);
@@ -3090,6 +3157,46 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         }
 
         const appYantekRows = orderedYantekReports.flatMap((r) => yantekReportToSheetRows(r));
+        const appYantekPemeliharaanByTs = new Map<string, string>();
+        const appYantekPemeliharaanByContent = new Map<string, string>();
+        for (const appRow of appYantekRows) {
+          appYantekPemeliharaanByTs.set(makeYantekTsKey(appRow), appRow[14]);
+          appYantekPemeliharaanByContent.set(makeYantekContentKey(appRow), appRow[14]);
+        }
+
+        const existingYantekGroupItems = new Map<
+          string,
+          { detailPekerjaan: string; volume: number }[]
+        >();
+        for (const r of existingSheetYantekRows) {
+          const groupKey = [r[0], r[1], r[2], r[6]].map(normalizeSheetKeyCell).join('|');
+          const arr = existingYantekGroupItems.get(groupKey) || [];
+          arr.push({
+            detailPekerjaan: r[8],
+            volume: Number(String(r[9] || '').replace(',', '.')) || 0,
+          });
+          existingYantekGroupItems.set(groupKey, arr);
+        }
+
+        for (const r of existingSheetYantekRows) {
+          if (r[14] === '') {
+            const tsKey = makeYantekTsKey(r);
+            const contentKey = makeYantekContentKey(r);
+            const matchedAppVal =
+              appYantekPemeliharaanByTs.get(tsKey) ??
+              appYantekPemeliharaanByContent.get(contentKey);
+            if (matchedAppVal !== undefined) {
+              r[14] = matchedAppVal;
+            } else {
+              const groupKey = [r[0], r[1], r[2], r[6]].map(normalizeSheetKeyCell).join('|');
+              const summary = getRealisasiPemeliharaanDetails(
+                existingYantekGroupItems.get(groupKey) || []
+              );
+              r[14] = formatPemeliharaanKms(summary.realisasiPemeliharaanKms);
+            }
+          }
+        }
+
         const mergedYantekRows: string[][] = [...existingSheetYantekRows];
         for (const appRow of appYantekRows) {
           const tsKey = makeYantekTsKey(appRow);
@@ -3166,7 +3273,11 @@ export async function ensureAndFormatTeknikSinjaiSheets(
 
         for (const targetTab of targetHvbTabTitles) {
           const tabMeta = meta.sheets.find((s) => s.title === targetTab);
-          if (tabMeta && ((tabMeta.columnCount || 0) < 12 || (tabMeta.rowCount || 0) < 500)) {
+          if (
+            tabMeta &&
+            ((tabMeta.columnCount || 0) < HVB_SHEET_HEADERS.length ||
+              (tabMeta.rowCount || 0) < 500)
+          ) {
             await sheetsFetchWithRetry(
               `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
                 spreadsheetId
@@ -3185,7 +3296,10 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                           sheetId: tabMeta.sheetId,
                           gridProperties: {
                             rowCount: Math.max(tabMeta.rowCount || 0, 1500),
-                            columnCount: Math.max(tabMeta.columnCount || 0, 12),
+                            columnCount: Math.max(
+                              tabMeta.columnCount || 0,
+                              HVB_SHEET_HEADERS.length
+                            ),
                           },
                         },
                         fields: 'gridProperties.rowCount,gridProperties.columnCount',
@@ -3217,6 +3331,14 @@ export async function ensureAndFormatTeknikSinjaiSheets(
           if (hvbReadRes.ok) {
             const hvbData = await hvbReadRes.json().catch(() => ({}));
             const rawVals: string[][] = Array.isArray(hvbData.values) ? hvbData.values : [];
+            const headerRow = (rawVals[0] || []).map((cell) =>
+              String(cell || '').trim().toUpperCase()
+            );
+            const headerPemeliharaanIdx = headerRow.findIndex((h) =>
+              h.includes('REALISASI PEMELIHARAAN')
+            );
+            const headerStatusIdx = headerRow.findIndex((h) => h.includes('STATUS'));
+
             for (let i = 0; i < rawVals.length; i++) {
               const row = rawVals[i] || [];
               const colA = String(row[0] || '').trim().toUpperCase();
@@ -3234,7 +3356,25 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                 continue;
               }
               const normalizedRow: string[] =
-                row.length >= 13
+                headerPemeliharaanIdx >= 0
+                  ? [
+                      formatSheetTextDateCell(row[0], true),
+                      formatSheetTextDateCell(row[1], false),
+                      String(row[2] ?? ''),
+                      String(row[3] ?? ''),
+                      String(row[4] ?? ''),
+                      String(row[5] ?? ''),
+                      String(row[6] ?? ''),
+                      String(row[7] ?? ''),
+                      String(row[8] ?? ''),
+                      String(row[9] ?? ''),
+                      String(row[10] ?? ''),
+                      String(row[headerPemeliharaanIdx] ?? ''),
+                      String(
+                        (headerStatusIdx >= 0 ? row[headerStatusIdx] : row[12]) || 'SELESAI'
+                      ),
+                    ]
+                  : row.length >= 13
                   ? [
                       formatSheetTextDateCell(row[0], true),
                       formatSheetTextDateCell(row[1], false),
@@ -3247,13 +3387,24 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                       String(row[8] ?? ''),
                       String(row[10] ?? ''),
                       String(row[11] ?? ''),
+                      '',
                       String(row[13] || 'SELESAI'),
                     ]
-                  : Array.from({ length: 12 }, (_, idx) => {
-                      if (idx === 0) return formatSheetTextDateCell(row[0], true);
-                      if (idx === 1) return formatSheetTextDateCell(row[1], false);
-                      return String(row[idx] ?? (idx === 11 ? 'SELESAI' : ''));
-                    });
+                  : [
+                      formatSheetTextDateCell(row[0], true),
+                      formatSheetTextDateCell(row[1], false),
+                      String(row[2] ?? ''),
+                      String(row[3] ?? ''),
+                      String(row[4] ?? ''),
+                      String(row[5] ?? ''),
+                      String(row[6] ?? ''),
+                      String(row[7] ?? ''),
+                      String(row[8] ?? ''),
+                      String(row[9] ?? ''),
+                      String(row[10] ?? ''),
+                      '',
+                      String(row[11] || 'SELESAI'),
+                    ];
 
               const tsKey = makeHvbTsKey(normalizedRow);
               const contentKey = makeHvbContentKey(normalizedRow);
@@ -3266,6 +3417,45 @@ export async function ensureAndFormatTeknikSinjaiSheets(
           }
 
           const appHvbRows = orderedHvbReports.flatMap((r) => hvbReportToSheetRows(r));
+          const appHvbPemeliharaanByTs = new Map<string, string>();
+          const appHvbPemeliharaanByContent = new Map<string, string>();
+          for (const appRow of appHvbRows) {
+            appHvbPemeliharaanByTs.set(makeHvbTsKey(appRow), appRow[11]);
+            appHvbPemeliharaanByContent.set(makeHvbContentKey(appRow), appRow[11]);
+          }
+
+          const existingHvbGroupItems = new Map<
+            string,
+            { detailPekerjaan: string; volume: number }[]
+          >();
+          for (const r of existingSheetHvbRows) {
+            const groupKey = [r[0], r[1], r[2], r[5]].map(normalizeSheetKeyCell).join('|');
+            const arr = existingHvbGroupItems.get(groupKey) || [];
+            arr.push({
+              detailPekerjaan: r[7],
+              volume: Number(String(r[8] || '').replace(',', '.')) || 0,
+            });
+            existingHvbGroupItems.set(groupKey, arr);
+          }
+
+          for (const r of existingSheetHvbRows) {
+            if (r[11] === '') {
+              const tsKey = makeHvbTsKey(r);
+              const contentKey = makeHvbContentKey(r);
+              const matchedAppVal =
+                appHvbPemeliharaanByTs.get(tsKey) ?? appHvbPemeliharaanByContent.get(contentKey);
+              if (matchedAppVal !== undefined) {
+                r[11] = matchedAppVal;
+              } else {
+                const groupKey = [r[0], r[1], r[2], r[5]].map(normalizeSheetKeyCell).join('|');
+                const summary = getRealisasiPemeliharaanDetails(
+                  existingHvbGroupItems.get(groupKey) || []
+                );
+                r[11] = formatPemeliharaanKms(summary.realisasiPemeliharaanKms);
+              }
+            }
+          }
+
           const mergedHvbRows: string[][] = [...existingSheetHvbRows];
           for (const appRow of appHvbRows) {
             const tsKey = makeHvbTsKey(appRow);
