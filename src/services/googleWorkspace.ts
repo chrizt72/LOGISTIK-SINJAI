@@ -13,6 +13,8 @@ import {
   MaterialStatus,
   YantekRealisasiReport,
   HvbRealisasiReport,
+  HvbEvidenRecord,
+  HvbEvidenUploadedFile,
   YantekDatabaseSegment,
   TrafoManagementRecord,
 } from '../types/warehouse';
@@ -2405,6 +2407,245 @@ export async function updateOutboundStatusInGoogleSheet(
 }
 
 // ============================================================================
+// INTEGRASI GOOGLE DRIVE EVIDEN PEKERJAAN HVB (1 TANGGAL = 1 FOLDER)
+// ============================================================================
+
+export const HVB_EVIDEN_STORAGE_KEY = 'simlog_sinjai_hvb_eviden_v1';
+export const HVB_EVIDEN_ROOT_FOLDER_NAME = 'EVIDEN PEKERJAAN HVB';
+
+export function normalizeEvidenDateKey(rawDate: unknown): string {
+  const formatted = formatSheetTextDateCell(rawDate, false).replace(/^'+/, '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
+    return formatted;
+  }
+  const isoMatch = formatted.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) {
+    return isoMatch[1];
+  }
+  const dmyMatch = formatted.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+  if (dmyMatch) {
+    return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function getStoredHvbEvidenRecords(): HvbEvidenRecord[] {
+  try {
+    const raw = localStorage.getItem(HVB_EVIDEN_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredHvbEvidenRecords(records: HvbEvidenRecord[]): void {
+  try {
+    localStorage.setItem(HVB_EVIDEN_STORAGE_KEY, JSON.stringify(records));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function escapeDriveQueryValue(val: string): string {
+  return String(val || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
+const inFlightEvidenFolderByDate = new Map<
+  string,
+  Promise<{ folderId: string; folderUrl: string; folderName: string; created: boolean }>
+>();
+
+async function findDriveFolderByName(
+  accessToken: string,
+  folderName: string,
+  parentId?: string
+): Promise<{ id: string; name: string; webViewLink?: string } | null> {
+  const parentClause = parentId ? `'${escapeDriveQueryValue(parentId)}' in parents and ` : '';
+  const query = `${parentClause}mimeType = 'application/vnd.google-apps.folder' and name = '${escapeDriveQueryValue(
+    folderName
+  )}' and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+    query
+  )}&fields=files(id,name,webViewLink)&orderBy=createdTime%20asc&pageSize=10&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(
+      await extractGoogleApiError(res, `Gagal mencari folder Google Drive "${folderName}"`)
+    );
+  }
+  const data = await res.json().catch(() => ({}));
+  const files: { id: string; name: string; webViewLink?: string }[] = Array.isArray(data?.files)
+    ? data.files
+    : [];
+  return files[0] || null;
+}
+
+async function createDriveFolder(
+  accessToken: string,
+  folderName: string,
+  parentId?: string
+): Promise<{ id: string; name: string; webViewLink: string }> {
+  const metadata: Record<string, any> = {
+    name: folderName,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (parentId) {
+    metadata.parents = [parentId];
+  }
+  const res = await fetch(
+    'https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink&supportsAllDrives=true',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(metadata),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(
+      await extractGoogleApiError(res, `Gagal membuat folder Google Drive "${folderName}"`)
+    );
+  }
+  const data = await res.json().catch(() => ({}));
+  const folderId = String(data?.id || '');
+  return {
+    id: folderId,
+    name: String(data?.name || folderName),
+    webViewLink: String(
+      data?.webViewLink || `https://drive.google.com/drive/folders/${folderId}`
+    ),
+  };
+}
+
+export async function ensureHvbEvidenDateFolder(
+  accessToken: string,
+  tanggalRealisasi: string
+): Promise<{ folderId: string; folderUrl: string; folderName: string; created: boolean }> {
+  const folderName = normalizeEvidenDateKey(tanggalRealisasi);
+  const existingPromise = inFlightEvidenFolderByDate.get(folderName);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const runEnsure = (async () => {
+    let rootFolder = await findDriveFolderByName(accessToken, HVB_EVIDEN_ROOT_FOLDER_NAME);
+    if (!rootFolder) {
+      rootFolder = await createDriveFolder(accessToken, HVB_EVIDEN_ROOT_FOLDER_NAME);
+    }
+
+    let dateFolder = await findDriveFolderByName(accessToken, folderName, rootFolder.id);
+    let created = false;
+    if (!dateFolder) {
+      dateFolder = await createDriveFolder(accessToken, folderName, rootFolder.id);
+      created = true;
+    }
+
+    const folderUrl =
+      dateFolder.webViewLink || `https://drive.google.com/drive/folders/${dateFolder.id}`;
+
+    // Best-effort share read access so officers opening the Spreadsheet link can inspect Eviden photos
+    await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+        dateFolder.id
+      )}/permissions?supportsAllDrives=true`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: 'reader',
+          type: 'anyone',
+        }),
+      }
+    ).catch(() => {});
+
+    return {
+      folderId: dateFolder.id,
+      folderUrl,
+      folderName,
+      created,
+    };
+  })();
+
+  inFlightEvidenFolderByDate.set(folderName, runEnsure);
+  try {
+    return await runEnsure;
+  } finally {
+    if (inFlightEvidenFolderByDate.get(folderName) === runEnsure) {
+      inFlightEvidenFolderByDate.delete(folderName);
+    }
+  }
+}
+
+export async function uploadHvbEvidenPhotoToDrive(
+  accessToken: string,
+  folderId: string,
+  fileBlob: Blob,
+  fileName: string,
+  description?: string
+): Promise<HvbEvidenUploadedFile> {
+  const boundary = `simlog_hvb_eviden_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const metadata: Record<string, any> = {
+    name: fileName,
+    parents: [folderId],
+  };
+  if (description && description.trim()) {
+    metadata.description = description.trim();
+  }
+
+  const contentType = fileBlob.type || 'image/jpeg';
+  const multipartBody = new Blob(
+    [
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+      JSON.stringify(metadata),
+      `\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`,
+      fileBlob,
+      `\r\n--${boundary}--`,
+    ],
+    { type: `multipart/related; boundary=${boundary}` }
+  );
+
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,mimeType,size&supportsAllDrives=true',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      await extractGoogleApiError(res, `Gagal mengupload foto eviden "${fileName}" ke Google Drive`)
+    );
+  }
+
+  const uploaded = await res.json().catch(() => ({}));
+  const fileId = String(uploaded?.id || '');
+  return {
+    fileId,
+    fileName: String(uploaded?.name || fileName),
+    webViewLink: String(
+      uploaded?.webViewLink || `https://drive.google.com/file/d/${fileId}/view`
+    ),
+  };
+}
+
+// ============================================================================
 // INTEGRASI SPREADSHEET "TEKNIK_SINJAI":
 // - SHEET "DATA_BASE" (gid=0): PENYULANG, KEYPOINT, SEGMENT, PANJANG KMS, DETAIL PEKERJAAN
 // - SHEET "YANTEK" (gid=896667653): REALISASI HARIAN PEKERJAAN YANTEK
@@ -2438,6 +2679,7 @@ export const YANTEK_SHEET_HEADERS = [
   'TITIK KOORDINAT AKHIR',
   'JUMLAH REALISASI WO',
   'JUMLAH REALISASI P0',
+  'TEMUAN BUTUH PADAM',
   'REALISASI PEMELIHARAAN (KMS)',
   'STATUS LAPORAN',
 ];
@@ -2455,6 +2697,8 @@ export const HVB_SHEET_HEADERS = [
   'TITIK KOORDINAT AWAL',
   'TITIK KOORDINAT AKHIR',
   'REALISASI PEMELIHARAAN (KMS)',
+  'KETERANGAN EVIDEN',
+  'LINK FOLDER EVIDEN',
   'STATUS LAPORAN',
 ];
 
@@ -2502,6 +2746,7 @@ export function yantekReportToSheetRows(report: YantekRealisasiReport): string[]
     report.koordinatAkhir,
     String(report.realisasiWo),
     String(report.realisasiP0),
+    String(report.temuanButuhPadam ?? 0),
     formattedPemeliharaanKms,
     'SELESAI',
   ]);
@@ -2539,6 +2784,8 @@ export function hvbReportToSheetRows(report: HvbRealisasiReport): string[][] {
     report.koordinatAwal,
     report.koordinatAkhir,
     formattedPemeliharaanKms,
+    '',
+    '',
     'SELESAI',
   ]);
 }
@@ -2547,6 +2794,7 @@ export interface TeknikSheetSyncOptions {
   syncYantek?: boolean;
   syncHvb?: boolean;
   initDb?: boolean;
+  hvbEvidenRecords?: HvbEvidenRecord[];
 }
 
 export const KNOWN_TEKNIK_SINJAI_SPREADSHEET_IDS = [
@@ -3064,6 +3312,9 @@ export async function ensureAndFormatTeknikSinjaiSheets(
           const headerRow = (rawVals[0] || []).map((cell) =>
             String(cell || '').trim().toUpperCase()
           );
+          const headerTemuanIdx = headerRow.findIndex((h) =>
+            h.includes('TEMUAN BUTUH PADAM')
+          );
           const headerPemeliharaanIdx = headerRow.findIndex((h) =>
             h.includes('REALISASI PEMELIHARAAN')
           );
@@ -3103,9 +3354,12 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                     String(row[11] ?? ''),
                     String(row[12] ?? ''),
                     String(row[13] ?? ''),
+                    headerTemuanIdx >= 0 ? String(row[headerTemuanIdx] ?? '0') : '',
                     String(row[headerPemeliharaanIdx] ?? ''),
                     String(
-                      (headerStatusIdx >= 0 ? row[headerStatusIdx] : row[15]) || 'SELESAI'
+                      (headerStatusIdx >= 0
+                        ? row[headerStatusIdx]
+                        : row[headerTemuanIdx >= 0 ? 16 : 15]) || 'SELESAI'
                     ),
                   ]
                 : row.length >= 16
@@ -3125,6 +3379,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                     String(row[13] ?? ''),
                     String(row[14] ?? ''),
                     '',
+                    '',
                     String(row[16] || 'SELESAI'),
                   ]
                 : [
@@ -3143,6 +3398,7 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                     String(row[12] ?? ''),
                     String(row[13] ?? ''),
                     '',
+                    '',
                     String(row[14] || 'SELESAI'),
                   ];
 
@@ -3157,11 +3413,15 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         }
 
         const appYantekRows = orderedYantekReports.flatMap((r) => yantekReportToSheetRows(r));
+        const appYantekTemuanByTs = new Map<string, string>();
+        const appYantekTemuanByContent = new Map<string, string>();
         const appYantekPemeliharaanByTs = new Map<string, string>();
         const appYantekPemeliharaanByContent = new Map<string, string>();
         for (const appRow of appYantekRows) {
-          appYantekPemeliharaanByTs.set(makeYantekTsKey(appRow), appRow[14]);
-          appYantekPemeliharaanByContent.set(makeYantekContentKey(appRow), appRow[14]);
+          appYantekTemuanByTs.set(makeYantekTsKey(appRow), appRow[14]);
+          appYantekTemuanByContent.set(makeYantekContentKey(appRow), appRow[14]);
+          appYantekPemeliharaanByTs.set(makeYantekTsKey(appRow), appRow[15]);
+          appYantekPemeliharaanByContent.set(makeYantekContentKey(appRow), appRow[15]);
         }
 
         const existingYantekGroupItems = new Map<
@@ -3179,20 +3439,26 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         }
 
         for (const r of existingSheetYantekRows) {
+          const tsKey = makeYantekTsKey(r);
+          const contentKey = makeYantekContentKey(r);
           if (r[14] === '') {
-            const tsKey = makeYantekTsKey(r);
-            const contentKey = makeYantekContentKey(r);
+            r[14] =
+              appYantekTemuanByTs.get(tsKey) ??
+              appYantekTemuanByContent.get(contentKey) ??
+              '0';
+          }
+          if (r[15] === '') {
             const matchedAppVal =
               appYantekPemeliharaanByTs.get(tsKey) ??
               appYantekPemeliharaanByContent.get(contentKey);
             if (matchedAppVal !== undefined) {
-              r[14] = matchedAppVal;
+              r[15] = matchedAppVal;
             } else {
               const groupKey = [r[0], r[1], r[2], r[6]].map(normalizeSheetKeyCell).join('|');
               const summary = getRealisasiPemeliharaanDetails(
                 existingYantekGroupItems.get(groupKey) || []
               );
-              r[14] = formatPemeliharaanKms(summary.realisasiPemeliharaanKms);
+              r[15] = formatPemeliharaanKms(summary.realisasiPemeliharaanKms);
             }
           }
         }
@@ -3252,7 +3518,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
 
     // ---------------------------------------------------------------------------
     // 6. Read existing rows in Sheet "HVB" (gid=1954293988), deduplicate and
-    //    merge with existingHvbReports, clear stale rows, and write to A1
+    //    merge with existingHvbReports & Eviden Pekerjaan HVB, enforce strictly
+    //    1 Drive Folder Link per Tanggal Realisasi, clear stale rows, and write to A1
     // ---------------------------------------------------------------------------
     if (shouldSyncHvb) {
       try {
@@ -3270,6 +3537,16 @@ export async function ensureAndFormatTeknikSinjaiSheets(
         }
 
         const orderedHvbReports = [...existingHvbReports].reverse();
+
+        // Merge Eviden records from explicit options and local cache
+        const combinedEvidenMap = new Map<string, HvbEvidenRecord>();
+        for (const rec of getStoredHvbEvidenRecords()) {
+          if (rec?.id) combinedEvidenMap.set(rec.id, rec);
+        }
+        for (const rec of options.hvbEvidenRecords || []) {
+          if (rec?.id) combinedEvidenMap.set(rec.id, rec);
+        }
+        const combinedEvidenList = Array.from(combinedEvidenMap.values());
 
         for (const targetTab of targetHvbTabTitles) {
           const tabMeta = meta.sheets.find((s) => s.title === targetTab);
@@ -3323,6 +3600,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
 
           const existingSheetHvbRows: string[][] = [];
           const seenHvbRowKeys = new Set<string>();
+          const existingSheetFolderUrlByDate = new Map<string, string>();
+          const existingSheetKeteranganByDateAndDetail = new Map<string, string>();
           const makeHvbTsKey = (r: string[]) =>
             [r[0], r[2], r[5], r[7]].map(normalizeSheetKeyCell).join('|');
           const makeHvbContentKey = (r: string[]) =>
@@ -3336,6 +3615,12 @@ export async function ensureAndFormatTeknikSinjaiSheets(
             );
             const headerPemeliharaanIdx = headerRow.findIndex((h) =>
               h.includes('REALISASI PEMELIHARAAN')
+            );
+            const headerKeteranganEvidenIdx = headerRow.findIndex((h) =>
+              h.includes('KETERANGAN EVIDEN')
+            );
+            const headerLinkEvidenIdx = headerRow.findIndex((h) =>
+              h.includes('LINK FOLDER EVIDEN')
             );
             const headerStatusIdx = headerRow.findIndex((h) => h.includes('STATUS'));
 
@@ -3351,10 +3636,47 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                 colA === '1' ||
                 colB === 'TANGGAL REALISASI' ||
                 colB === 'TANGGAL' ||
-                (!colC && !colF)
+                (!colC && !colF && !(headerLinkEvidenIdx >= 0 && row[headerLinkEvidenIdx]))
               ) {
                 continue;
               }
+
+              const rowDateKey = normalizeEvidenDateKey(row[1]);
+              const rowDetailKey = normalizeSheetKeyCell(row[7]);
+              const rowLinkVal =
+                headerLinkEvidenIdx >= 0 ? String(row[headerLinkEvidenIdx] || '').trim() : '';
+              const rowKetVal =
+                headerKeteranganEvidenIdx >= 0
+                  ? String(row[headerKeteranganEvidenIdx] || '').trim()
+                  : '';
+              const rawStatusVal = String(
+                (headerStatusIdx >= 0
+                  ? row[headerStatusIdx]
+                  : headerPemeliharaanIdx >= 0
+                  ? row[12]
+                  : row.length >= 13
+                  ? row[13]
+                  : row[11]) || 'SELESAI'
+              )
+                .trim()
+                .toUpperCase();
+
+              if (rowLinkVal && !existingSheetFolderUrlByDate.has(rowDateKey)) {
+                existingSheetFolderUrlByDate.set(rowDateKey, rowLinkVal);
+              }
+              if (rowKetVal && rowDetailKey) {
+                existingSheetKeteranganByDateAndDetail.set(
+                  `${rowDateKey}|${rowDetailKey}`,
+                  rowKetVal
+                );
+              }
+
+              // Skip regenerating standalone Eviden-only placeholder rows from the sheet;
+              // we will re-emit fresh standalone rows from combinedEvidenList when needed.
+              if (rawStatusVal === 'EVIDEN DIUPLOAD') {
+                continue;
+              }
+
               const normalizedRow: string[] =
                 headerPemeliharaanIdx >= 0
                   ? [
@@ -3370,9 +3692,9 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                       String(row[9] ?? ''),
                       String(row[10] ?? ''),
                       String(row[headerPemeliharaanIdx] ?? ''),
-                      String(
-                        (headerStatusIdx >= 0 ? row[headerStatusIdx] : row[12]) || 'SELESAI'
-                      ),
+                      rowKetVal,
+                      rowLinkVal,
+                      rawStatusVal || 'SELESAI',
                     ]
                   : row.length >= 13
                   ? [
@@ -3388,6 +3710,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                       String(row[10] ?? ''),
                       String(row[11] ?? ''),
                       '',
+                      '',
+                      '',
                       String(row[13] || 'SELESAI'),
                     ]
                   : [
@@ -3402,6 +3726,8 @@ export async function ensureAndFormatTeknikSinjaiSheets(
                       String(row[8] ?? ''),
                       String(row[9] ?? ''),
                       String(row[10] ?? ''),
+                      '',
+                      '',
                       '',
                       String(row[11] || 'SELESAI'),
                     ];
@@ -3464,6 +3790,95 @@ export async function ensureAndFormatTeknikSinjaiSheets(
               seenHvbRowKeys.add(tsKey);
               seenHvbRowKeys.add(contentKey);
               mergedHvbRows.push(appRow);
+            }
+          }
+
+          // Build per-date Google Drive folder map and per-(date, detail) keterangan map from Eviden Pekerjaan HVB
+          const folderUrlByDate = new Map<string, string>(existingSheetFolderUrlByDate);
+          const keteranganByDateAndDetail = new Map<string, string[]>(
+            Array.from(existingSheetKeteranganByDateAndDetail.entries()).map(([k, v]) => [k, [v]])
+          );
+
+          for (const ev of combinedEvidenList) {
+            const dKey = normalizeEvidenDateKey(ev.tanggalRealisasi);
+            const detailKey = normalizeSheetKeyCell(ev.detailPekerjaan);
+            if (ev.driveFolderUrl) {
+              folderUrlByDate.set(dKey, ev.driveFolderUrl);
+            }
+            const cleanKet = String(ev.keterangan || '').trim();
+            if (cleanKet && detailKey) {
+              const mapKey = `${dKey}|${detailKey}`;
+              const existingNotes = keteranganByDateAndDetail.get(mapKey) || [];
+              if (!existingNotes.includes(cleanKet)) {
+                existingNotes.push(cleanKet);
+                keteranganByDateAndDetail.set(mapKey, existingNotes);
+              }
+            }
+          }
+
+          // Track which (tanggalRealisasi, detailPekerjaan) pairs are already represented by real HVB report rows
+          const coveredDateDetailPairs = new Set<string>();
+          for (const r of mergedHvbRows) {
+            const dKey = normalizeEvidenDateKey(r[1]);
+            const detKey = normalizeSheetKeyCell(r[7]);
+            if (dKey && detKey) {
+              coveredDateDetailPairs.add(`${dKey}|${detKey}`);
+            }
+          }
+
+          // For Eviden records whose (tanggal, detailPekerjaan) doesn't have an HVB input row yet,
+          // emit one standalone row per distinct (tanggal, detailPekerjaan)
+          const addedEvidenPlaceholderPairs = new Set<string>();
+          const orderedEvidenList = [...combinedEvidenList].reverse();
+          for (const ev of orderedEvidenList) {
+            const dKey = normalizeEvidenDateKey(ev.tanggalRealisasi);
+            const detKey = normalizeSheetKeyCell(ev.detailPekerjaan);
+            const pairKey = `${dKey}|${detKey}`;
+            if (coveredDateDetailPairs.has(pairKey) || addedEvidenPlaceholderPairs.has(pairKey)) {
+              continue;
+            }
+            addedEvidenPlaceholderPairs.add(pairKey);
+            const notes = keteranganByDateAndDetail.get(pairKey) || [];
+            mergedHvbRows.push([
+              formatSheetTextDateCell(ev.uploadedAt, true),
+              formatSheetTextDateCell(dKey, false),
+              'HVB',
+              '-',
+              '-',
+              '-',
+              '-',
+              ev.detailPekerjaan,
+              String(ev.files?.length || 1),
+              '-',
+              '-',
+              '0',
+              notes.join(' | '),
+              '',
+              'EVIDEN DIUPLOAD',
+            ]);
+          }
+
+          // Strict single-folder-link-per-date pass:
+          // If the same TANGGAL REALISASI has multiple detail pekerjaan rows,
+          // ONLY the first row for that date displays the Google Drive folder URL.
+          const shownFolderLinkDates = new Set<string>();
+          for (const r of mergedHvbRows) {
+            const dKey = normalizeEvidenDateKey(r[1]);
+            const detKey = normalizeSheetKeyCell(r[7]);
+            const pairKey = `${dKey}|${detKey}`;
+            const notes = keteranganByDateAndDetail.get(pairKey);
+            if (notes && notes.length > 0) {
+              r[12] = notes.join(' | ');
+            } else if (!r[12]) {
+              r[12] = '';
+            }
+
+            const folderUrl = folderUrlByDate.get(dKey) || '';
+            if (folderUrl && !shownFolderLinkDates.has(dKey)) {
+              r[13] = folderUrl;
+              shownFolderLinkDates.add(dKey);
+            } else {
+              r[13] = '';
             }
           }
 
@@ -3670,7 +4085,8 @@ export async function appendHvbReportToGoogleSheet(
   accessToken: string,
   spreadsheetId: string,
   report: HvbRealisasiReport,
-  allHvbReports: HvbRealisasiReport[] = []
+  allHvbReports: HvbRealisasiReport[] = [],
+  hvbEvidenRecords?: HvbEvidenRecord[]
 ): Promise<SpreadsheetMetadata> {
   const combinedHvb = [
     report,
@@ -3681,7 +4097,7 @@ export async function appendHvbReportToGoogleSheet(
     spreadsheetId,
     [],
     combinedHvb,
-    { syncYantek: false, syncHvb: true, initDb: false }
+    { syncYantek: false, syncHvb: true, initDb: false, hvbEvidenRecords }
   );
 }
 
@@ -3694,7 +4110,8 @@ let inFlightHvbSyncPromise: Promise<{
 export async function syncHvbReportsToAllTeknikSheets(
   accessToken: string,
   hvbReportsToSync: HvbRealisasiReport[],
-  preferredSpreadsheetId?: string
+  preferredSpreadsheetId?: string,
+  hvbEvidenRecords?: HvbEvidenRecord[]
 ): Promise<{
   primaryMeta: SpreadsheetMetadata;
   syncedCount: number;
@@ -3747,7 +4164,8 @@ export async function syncHvbReportsToAllTeknikSheets(
           accessToken,
           'TEKNIK SINJAI',
           [],
-          hvbReportsToSync
+          hvbReportsToSync,
+          hvbEvidenRecords
         );
         return {
           primaryMeta: createdMeta,
@@ -3773,7 +4191,7 @@ export async function syncHvbReportsToAllTeknikSheets(
             id,
             [],
             hvbReportsToSync,
-            { syncYantek: false, syncHvb: true, initDb: false }
+            { syncYantek: false, syncHvb: true, initDb: false, hvbEvidenRecords }
           );
           syncedCount++;
           if (!primaryMeta || hasHvbGid) {
@@ -3916,7 +4334,8 @@ export async function createNewTeknikSinjaiGoogleSheet(
   accessToken: string,
   title: string = 'TEKNIK SINJAI',
   reports: YantekRealisasiReport[] = [],
-  hvbReports: HvbRealisasiReport[] = []
+  hvbReports: HvbRealisasiReport[] = [],
+  hvbEvidenRecords?: HvbEvidenRecord[]
 ): Promise<SpreadsheetMetadata> {
   const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
     method: 'POST',
@@ -3955,7 +4374,7 @@ export async function createNewTeknikSinjaiGoogleSheet(
             title: 'HVB',
             gridProperties: {
               rowCount: 1500,
-              columnCount: 14,
+              columnCount: Math.max(HVB_SHEET_HEADERS.length, 15),
               frozenRowCount: 1,
             },
           },
@@ -3978,7 +4397,7 @@ export async function createNewTeknikSinjaiGoogleSheet(
     spreadsheetId,
     reports,
     hvbReports,
-    { syncYantek: true, syncHvb: true, initDb: true }
+    { syncYantek: true, syncHvb: true, initDb: true, hvbEvidenRecords }
   );
 }
 

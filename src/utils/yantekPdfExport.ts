@@ -76,15 +76,15 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   doc.setTextColor(71, 85, 105);
   doc.text('Segmen Pekerjaan (C)', rightXLabel, y + 14);
   doc.text('Panjang Segmen (D)', rightXLabel, y + 20.5);
-  doc.text('Realisasi WO', rightXLabel, y + 27);
-  doc.text('Realisasi P0', rightXLabel, y + 33.5);
+  doc.text('Realisasi WO / P0', rightXLabel, y + 27);
+  doc.text('Temuan Butuh Padam', rightXLabel, y + 33.5);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text(`: ${report.segment}`, rightXVal, y + 14);
   doc.text(`: ${report.panjangKms ? `${report.panjangKms} KMS` : '-'}`, rightXVal, y + 20.5);
-  doc.text(`: ${report.realisasiWo} WO`, rightXVal, y + 27);
-  doc.text(`: ${report.realisasiP0} P0`, rightXVal, y + 33.5);
+  doc.text(`: ${report.realisasiWo} WO / ${report.realisasiP0} P0`, rightXVal, y + 27);
+  doc.text(`: ${report.temuanButuhPadam ?? 0}`, rightXVal, y + 33.5);
 
   y += 50;
 
@@ -174,7 +174,7 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   y += 4;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, y, pageWidth - 28, 34, 'FD');
+  doc.rect(14, y, pageWidth - 28, 41, 'FD');
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
@@ -182,7 +182,8 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
   doc.text('Titik Koordinat Awal', 18, y + 7);
   doc.text('Titik Koordinat Akhir', 18, y + 14);
   doc.text('Jumlah Realisasi WO / P0', 18, y + 21);
-  doc.text('Realisasi Pemeliharaan', 18, y + 28);
+  doc.text('Temuan Butuh Padam', 18, y + 28);
+  doc.text('Realisasi Pemeliharaan', 18, y + 35);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
@@ -193,10 +194,11 @@ export function buildYantekPdfDocument(report: YantekRealisasiReport): jsPDF {
     62,
     y + 21
   );
+  doc.text(`: ${report.temuanButuhPadam ?? 0}`, 62, y + 28);
   doc.setTextColor(6, 95, 70);
-  doc.text(`: ${formatPemeliharaanKms(yantekPemeliharaanKms)} KMS`, 62, y + 28);
+  doc.text(`: ${formatPemeliharaanKms(yantekPemeliharaanKms)} KMS`, 62, y + 35);
 
-  y += 44;
+  y += 51;
 
   // Footer Signature
   doc.setFont('helvetica', 'normal');
@@ -261,6 +263,7 @@ export function buildYantekWhatsAppText(report: YantekRealisasiReport): string {
     `• *Titik Koordinat Akhir:* ${report.koordinatAkhir}`,
     `• *Jumlah Realisasi WO:* ${report.realisasiWo}`,
     `• *Jumlah Realisasi P0:* ${report.realisasiP0}`,
+    `• *Temuan Butuh Padam:* ${report.temuanButuhPadam ?? 0}`,
     `• *Status Spreadsheet:* Tersimpan ke Sheet YANTEK (gid=896667653)`,
   ].join('\n');
 }

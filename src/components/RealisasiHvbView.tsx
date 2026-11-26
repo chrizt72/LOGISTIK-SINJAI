@@ -16,13 +16,16 @@ import {
   Zap,
   PlusCircle,
   History,
+  Camera,
 } from 'lucide-react';
 import { TrafoManagementSection } from './TrafoManagementSection';
+import { HvbEvidenSection } from './HvbEvidenSection';
 import {
   HVB_PELAKSANA_UNITS,
   YantekDatabaseSegment,
   YantekWorkItemInput,
   HvbRealisasiReport,
+  HvbEvidenRecord,
 } from '../types/warehouse';
 import {
   SpreadsheetMetadata,
@@ -47,6 +50,7 @@ interface RealisasiHvbViewProps {
   segments: YantekDatabaseSegment[];
   pekerjaanCatalog: string[];
   reports: HvbRealisasiReport[];
+  evidenRecords?: HvbEvidenRecord[];
   accessToken: string | null;
   needsAuth: boolean;
   onUpdateDatabaseFromSheet: (
@@ -54,6 +58,8 @@ interface RealisasiHvbViewProps {
     newPekerjaan: string[]
   ) => void;
   onReportCreated: (newReport: HvbRealisasiReport, allReports: HvbRealisasiReport[]) => void;
+  onEvidenCreated?: (newEviden: HvbEvidenRecord, allEviden: HvbEvidenRecord[]) => void;
+  onDeleteEviden?: (evidenId: string) => Promise<void>;
   onDeleteReport?: (reportId: string) => Promise<void>;
   onTriggerSound?: (kind: 'scan' | 'error' | 'commit') => void;
 }
@@ -64,13 +70,18 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
   segments,
   pekerjaanCatalog,
   reports,
+  evidenRecords = [],
   accessToken,
   needsAuth,
   onReportCreated,
+  onEvidenCreated,
+  onDeleteEviden,
   onTriggerSound,
 }) => {
-  // Sub-menu state: Input Realisasi HVB | Manajemen Trafo | + Sisip Trafo | Riwayat Trafo
-  const [activeSubMenu, setActiveSubMenu] = useState<'input' | 'mutasi' | 'sisip' | 'riwayat'>('input');
+  // Sub-menu state: 1. Input Realisasi HVB | 2. Manajemen Trafo | 3. Sisip Trafo | 4. Eviden Pekerjaan | 5. Riwayat Trafo
+  const [activeSubMenu, setActiveSubMenu] = useState<
+    'input' | 'mutasi' | 'sisip' | 'eviden' | 'riwayat'
+  >('input');
 
   // 1. Pilih Pelaksana state
   const [selectedUnit, setSelectedUnit] = useState<string>(HVB_PELAKSANA_UNITS[0]);
@@ -103,6 +114,10 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [completedReportModal, setCompletedReportModal] =
     useState<HvbRealisasiReport | null>(null);
+  const [evidenPrefill, setEvidenPrefill] = useState<{
+    tanggal: string;
+    pekerjaanList: string[];
+  } | null>(null);
   const [sheetSyncWarning, setSheetSyncWarning] = useState<string | null>(null);
   const [isRetryingSheetSync, setIsRetryingSheetSync] = useState<boolean>(false);
 
@@ -126,7 +141,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
   const pekerjaanInputRef = useRef<HTMLInputElement>(null);
   const volumeInputRef = useRef<HTMLInputElement>(null);
-  const lastAutoSyncedHvbCountRef = useRef<number>(-1);
+  const lastAutoSyncedHvbKeyRef = useRef<string>('');
 
   useEffect(() => {
     try {
@@ -143,16 +158,17 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
     }
   }, [connectedTeknikSheet]);
 
-  // Background auto-sync HVB reports to TEKNIK SINJAI when logged in and reports exist
+  // Background auto-sync HVB reports & Eviden to TEKNIK SINJAI when logged in and data exists
   useEffect(() => {
     let cancelled = false;
 
     const autoDiscoverAndSyncTeknikSinjai = async () => {
-      if (reports.length === 0 || isSubmitting) return;
+      if ((reports.length === 0 && evidenRecords.length === 0) || isSubmitting) return;
       const activeToken = (await getAccessToken()) || accessToken;
       if (!activeToken) return;
 
-      if (lastAutoSyncedHvbCountRef.current === reports.length) {
+      const syncKey = `${reports.length}:${evidenRecords.length}`;
+      if (lastAutoSyncedHvbKeyRef.current === syncKey) {
         return;
       }
 
@@ -165,16 +181,17 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
         const { primaryMeta } = await syncHvbReportsToAllTeknikSheets(
           activeToken,
           reports,
-          preferredId || undefined
+          preferredId || undefined,
+          evidenRecords
         );
 
         if (cancelled) return;
-        lastAutoSyncedHvbCountRef.current = reports.length;
+        lastAutoSyncedHvbKeyRef.current = syncKey;
         setConnectedTeknikSheet(primaryMeta);
         setTeknikSheetUrlInput(primaryMeta.spreadsheetUrl);
         setSheetSyncWarning(null);
       } catch (err) {
-        lastAutoSyncedHvbCountRef.current = -1;
+        lastAutoSyncedHvbKeyRef.current = '';
         console.warn('Auto-discover TEKNIK SINJAI for HVB skipped:', err);
       }
     };
@@ -183,7 +200,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, needsAuth, reports.length, isSubmitting]);
+  }, [accessToken, needsAuth, reports.length, evidenRecords.length, isSubmitting]);
 
   const selectableSegments = useMemo(() => {
     const validFromProps = segments.filter(
@@ -355,7 +372,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
     const activeToken = overrideToken || (await getAccessToken()) || accessToken;
     if (!activeToken) {
-      lastAutoSyncedHvbCountRef.current = -1;
+      lastAutoSyncedHvbKeyRef.current = '';
       setSheetSyncWarning(
         'Sesi Google berakhir. Klik tombol "Sinkronkan ke Spreadsheet" di bawah untuk mengirim laporan ke Sheet HVB (gid=1954293988).'
       );
@@ -371,16 +388,17 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
       const { primaryMeta } = await syncHvbReportsToAllTeknikSheets(
         activeToken,
         combinedHvb,
-        preferredId || undefined
+        preferredId || undefined,
+        evidenRecords
       );
 
-      lastAutoSyncedHvbCountRef.current = combinedHvb.length;
+      lastAutoSyncedHvbKeyRef.current = `${combinedHvb.length}:${evidenRecords.length}`;
       setConnectedTeknikSheet(primaryMeta);
       setTeknikSheetUrlInput(primaryMeta.spreadsheetUrl);
       setSheetSyncWarning(null);
       return true;
     } catch (sheetErr) {
-      lastAutoSyncedHvbCountRef.current = -1;
+      lastAutoSyncedHvbKeyRef.current = '';
       console.warn('Sync HVB warning:', sheetErr);
       setSheetSyncWarning(
         'Laporan tersimpan di aplikasi, namun sesi Google perlu disegarkan. Klik tombol "Sinkronkan ke Spreadsheet" di bawah untuk mengirim ke Sheet HVB (gid=1954293988).'
@@ -565,7 +583,7 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Sub-Menu Realisasi HVB: Input HVB, Manajemen Trafo, Sisip Trafo, Riwayat Trafo */}
+      {/* Sub-Menu Realisasi HVB: 1. Input HVB, 2. Manajemen Trafo, 3. Sisip Trafo, 4. Eviden Pekerjaan, 5. Riwayat Trafo */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 sm:p-2 grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 shadow-xs">
         <button
           type="button"
@@ -608,8 +626,21 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveSubMenu('riwayat')}
+          onClick={() => setActiveSubMenu('eviden')}
           className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
+            activeSubMenu === 'eviden'
+              ? 'bg-emerald-600 text-white shadow-sm'
+              : 'text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
+          }`}
+        >
+          <Camera className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Eviden Pekerjaan</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('riwayat')}
+          className={`col-span-2 sm:col-auto min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors ${
             activeSubMenu === 'riwayat'
               ? 'bg-[#126b82] text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -620,7 +651,31 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
         </button>
       </div>
 
-      {activeSubMenu !== 'input' ? (
+      {activeSubMenu === 'eviden' ? (
+        <HvbEvidenSection
+          pekerjaanCatalog={pekerjaanCatalog}
+          reports={reports}
+          evidenRecords={evidenRecords}
+          accessToken={accessToken}
+          connectedTeknikSheet={connectedTeknikSheet}
+          teknikSheetUrlInput={teknikSheetUrlInput}
+          prefilledTanggal={evidenPrefill?.tanggal}
+          prefilledPekerjaanList={evidenPrefill?.pekerjaanList}
+          onConsumePrefill={() => setEvidenPrefill(null)}
+          onTeknikSheetSynced={(meta) => {
+            setConnectedTeknikSheet(meta);
+            setTeknikSheetUrlInput(meta.spreadsheetUrl);
+            setSheetSyncWarning(null);
+          }}
+          onEvidenCreated={(newEviden, allEviden) => {
+            if (onEvidenCreated) {
+              onEvidenCreated(newEviden, allEviden);
+            }
+          }}
+          onDeleteEviden={onDeleteEviden}
+          onTriggerSound={onTriggerSound}
+        />
+      ) : activeSubMenu !== 'input' ? (
         <TrafoManagementSection
           mode={activeSubMenu}
           onChangeMode={(nextMode) => setActiveSubMenu(nextMode)}
@@ -1251,6 +1306,39 @@ export const RealisasiHvbView: React.FC<RealisasiHvbViewProps> = ({
                     Koordinat: {completedReportModal.koordinatAwal} s/d{' '}
                     {completedReportModal.koordinatAkhir}
                   </div>
+                </div>
+
+                {/* ARAHAN & SHORTCUT MENUJU MENU EVIDEN PEKERJAAN */}
+                <div className="p-3.5 rounded-xl bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 space-y-2.5 text-xs">
+                  <div className="flex items-start gap-2.5 text-sky-950 dark:text-sky-100">
+                    <Camera className="w-4 h-4 text-[#0b4f6c] dark:text-[#facc15] shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <div className="font-bold">
+                        Langkah Selanjutnya: Upload Eviden Pekerjaan
+                      </div>
+                      <p className="text-[11px] text-sky-800 dark:text-sky-200/90 leading-relaxed">
+                        Silakan lanjutkan mengisi menu <strong>Eviden Pekerjaan</strong> untuk mengupload foto dokumentasi sesuai detail pekerjaan yang telah dilaporkan.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const prefillDetails = completedReportModal.pekerjaanList
+                        .map((p) => p.detailPekerjaan.trim())
+                        .filter(Boolean);
+                      setEvidenPrefill({
+                        tanggal: completedReportModal.tanggalLaporan,
+                        pekerjaanList: prefillDetails,
+                      });
+                      setCompletedReportModal(null);
+                      setActiveSubMenu('eviden');
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 text-xs font-extrabold text-white bg-[#0b4f6c] hover:bg-[#083d54] rounded-xl flex items-center justify-center gap-2 transition-colors shadow-xs"
+                  >
+                    <Camera className="w-4 h-4 text-[#facc15] shrink-0" />
+                    <span>Buka Menu Eviden Pekerjaan</span>
+                  </button>
                 </div>
 
             {sheetSyncWarning && (

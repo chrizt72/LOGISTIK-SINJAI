@@ -133,6 +133,7 @@ export interface YantekRealisasiReport {
   koordinatAkhir: string;
   realisasiWo: number;
   realisasiP0: number;
+  temuanButuhPadam?: number;
   realisasiPemeliharaanKms?: number;
   petugasPelapor?: string;
 }
@@ -160,6 +161,23 @@ export interface HvbRealisasiReport {
   koordinatAkhir: string;
   realisasiPemeliharaanKms?: number;
   petugasPelapor?: string;
+}
+
+export interface HvbEvidenUploadedFile {
+  fileId: string;
+  fileName: string;
+  webViewLink: string;
+}
+
+export interface HvbEvidenRecord {
+  id: string;
+  tanggalRealisasi: string; // YYYY-MM-DD
+  detailPekerjaan: string;
+  keterangan?: string;
+  driveFolderId: string;
+  driveFolderUrl: string;
+  files: HvbEvidenUploadedFile[];
+  uploadedAt: string; // YYYY-MM-DD HH:mm:ss
 }
 
 export interface TrafoData {

@@ -44,6 +44,7 @@ import {
   WarehouseStats,
   YantekRealisasiReport,
   HvbRealisasiReport,
+  HvbEvidenRecord,
   YantekDatabaseSegment,
 } from './types/warehouse';
 import { DEFAULT_TEKNIK_SINJAI_DATA } from './data/teknikSinjaiDatabase';
@@ -112,6 +113,8 @@ import {
   mimsRowToSheetValues,
   syncYantekReportsToAllTeknikSheets,
   syncHvbReportsToAllTeknikSheets,
+  getStoredHvbEvidenRecords,
+  saveStoredHvbEvidenRecords,
 } from './services/googleWorkspace';
 
 type ActiveModule = 'logistik' | 'yantek' | 'hvb';
@@ -228,6 +231,9 @@ export default function App() {
   const [eksekusiMimsRows, setEksekusiMimsRows] = useState<EksekusiMimsRow[]>([]);
   const [yantekReports, setYantekReports] = useState<YantekRealisasiReport[]>([]);
   const [hvbReports, setHvbReports] = useState<HvbRealisasiReport[]>([]);
+  const [hvbEvidenList, setHvbEvidenList] = useState<HvbEvidenRecord[]>(() =>
+    getStoredHvbEvidenRecords()
+  );
   const [yantekSegments, setYantekSegments] = useState<YantekDatabaseSegment[]>(
     DEFAULT_TEKNIK_SINJAI_DATA.segments
   );
@@ -396,6 +402,10 @@ export default function App() {
             }
             if (Array.isArray(cached.yantekReports)) setYantekReports(cached.yantekReports);
             if (Array.isArray(cached.hvbReports)) setHvbReports(cached.hvbReports);
+            if (Array.isArray(cached.hvbEvidenList)) {
+              setHvbEvidenList(cached.hvbEvidenList);
+              saveStoredHvbEvidenRecords(cached.hvbEvidenList);
+            }
           }
         } catch {
           // Ignore local cache parse error
@@ -411,6 +421,10 @@ export default function App() {
       }
       if (Array.isArray(data.hvbReports)) {
         setHvbReports(data.hvbReports);
+      }
+      if (Array.isArray(data.hvbEvidenList)) {
+        setHvbEvidenList(data.hvbEvidenList);
+        saveStoredHvbEvidenRecords(data.hvbEvidenList);
       }
       if (Array.isArray(data.yantekSegments) && data.yantekSegments.length > 0) {
         setYantekSegments(data.yantekSegments);
@@ -435,6 +449,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    saveStoredHvbEvidenRecords(hvbEvidenList);
+  }, [hvbEvidenList]);
+
+  useEffect(() => {
     if (isLoading || hasBackendServerRef.current) return;
     try {
       localStorage.setItem(
@@ -444,12 +462,13 @@ export default function App() {
           eksekusiMimsRows,
           yantekReports,
           hvbReports,
+          hvbEvidenList,
         })
       );
     } catch {
       // Ignore storage quota errors
     }
-  }, [isLoading, rows, eksekusiMimsRows, yantekReports, hvbReports]);
+  }, [isLoading, rows, eksekusiMimsRows, yantekReports, hvbReports, hvbEvidenList]);
 
   useEffect(() => {
     fetchWarehouseData();
@@ -659,14 +678,19 @@ export default function App() {
       });
     }
 
-    const hvbKey = `${accessToken.slice(-12)}:${hvbReports.length}`;
-    if (hvbReports.length > 0 && lastSyncedHvbTokenKeyRef.current !== hvbKey) {
+    const hvbKey = `${accessToken.slice(-12)}:${hvbReports.length}:${hvbEvidenList.length}`;
+    if (
+      (hvbReports.length > 0 || hvbEvidenList.length > 0) &&
+      lastSyncedHvbTokenKeyRef.current !== hvbKey
+    ) {
       lastSyncedHvbTokenKeyRef.current = hvbKey;
-      syncHvbReportsToAllTeknikSheets(accessToken, hvbReports).catch(() => {
-        lastSyncedHvbTokenKeyRef.current = '';
-      });
+      syncHvbReportsToAllTeknikSheets(accessToken, hvbReports, undefined, hvbEvidenList).catch(
+        () => {
+          lastSyncedHvbTokenKeyRef.current = '';
+        }
+      );
     }
-  }, [accessToken, needsAuth, isLoading, hvbReports, yantekReports]);
+  }, [accessToken, needsAuth, isLoading, hvbReports, hvbEvidenList, yantekReports]);
 
   // Auto-discover, format, and repair date columns in LOGISTIK SINJAI spreadsheet when accessToken is active
   const formattedSpreadsheetIdsRef = useRef<Set<string>>(new Set());
@@ -4606,6 +4630,7 @@ export default function App() {
             segments={yantekSegments}
             pekerjaanCatalog={yantekPekerjaanCatalog}
             reports={hvbReports}
+            evidenRecords={hvbEvidenList}
             accessToken={accessToken}
             needsAuth={needsAuth}
             onUpdateDatabaseFromSheet={(newSegments, newPekerjaan) => {
@@ -4614,6 +4639,27 @@ export default function App() {
             }}
             onReportCreated={(_newReport, allReports) => {
               setHvbReports(allReports);
+            }}
+            onEvidenCreated={(_newEviden, allEviden) => {
+              setHvbEvidenList(allEviden);
+            }}
+            onDeleteEviden={async (evidenId) => {
+              setHvbEvidenList((prev) => prev.filter((item) => item.id !== evidenId));
+              try {
+                const res = await fetch(`/api/hvb/eviden/${encodeURIComponent(evidenId)}`, {
+                  method: 'DELETE',
+                });
+                const rawText = await res.text();
+                const trimmed = rawText.trim();
+                if (trimmed && !trimmed.startsWith('<')) {
+                  const data = JSON.parse(trimmed);
+                  if (Array.isArray(data.evidenList)) {
+                    setHvbEvidenList(data.evidenList);
+                  }
+                }
+              } catch {
+                // Ignore if static/offline
+              }
             }}
             onDeleteReport={async (reportId) => {
               setHvbReports((prev) => prev.filter((r) => r.id !== reportId));

@@ -10,6 +10,7 @@ import type {
   MaterialStatus,
   YantekRealisasiReport,
   HvbRealisasiReport,
+  HvbEvidenRecord,
   YantekDatabaseSegment,
   YantekWorkItemInput,
   TrafoManagementRecord,
@@ -70,6 +71,7 @@ interface WarehouseState {
   eksekusiMimsRows: EksekusiMimsRow[];
   yantekReports?: YantekRealisasiReport[];
   hvbReports?: HvbRealisasiReport[];
+  hvbEvidenList?: HvbEvidenRecord[];
   trafoRecords?: TrafoManagementRecord[];
   logs: ScanLogEntry[];
   counters: {
@@ -341,7 +343,7 @@ function escapeCsvCell(val: string | number): string {
 
 function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
   const header =
-    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (UNIT),NAMA PETUGAS,PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,JUMLAH REALISASI WO,JUMLAH REALISASI P0,REALISASI PEMELIHARAAN (KMS),STATUS LAPORAN';
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (UNIT),NAMA PETUGAS,PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,JUMLAH REALISASI WO,JUMLAH REALISASI P0,TEMUAN BUTUH PADAM,REALISASI PEMELIHARAAN (KMS),STATUS LAPORAN';
   const lines = [header];
   for (const r of reports) {
     const items =
@@ -369,6 +371,7 @@ function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
           escapeCsvCell(r.koordinatAkhir),
           escapeCsvCell(r.realisasiWo),
           escapeCsvCell(r.realisasiP0),
+          escapeCsvCell(r.temuanButuhPadam ?? 0),
           escapeCsvCell(formatPemeliharaanKms(realisasiPemeliharaanKms)),
           'SELESAI',
         ].join(',')
@@ -378,10 +381,44 @@ function buildYantekCsvContent(reports: YantekRealisasiReport[]): string {
   return lines.join('\r\n') + '\r\n';
 }
 
-function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
+function normalizeCsvDateKey(raw: unknown): string {
+  const cleaned = String(raw || '').trim().replace(/^'+/, '');
+  const isoMatch = cleaned.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  const dmyMatch = cleaned.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+  if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+  return cleaned;
+}
+
+function buildHvbCsvContent(
+  reports: HvbRealisasiReport[],
+  evidenList: HvbEvidenRecord[] = []
+): string {
   const header =
-    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (HVB),PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,REALISASI PEMELIHARAAN (KMS),STATUS LAPORAN';
-  const lines = [header];
+    'WAKTU LAPORAN,TANGGAL REALISASI,TIM PELAKSANA (HVB),PENYULANG,KEYPOINT,SEGMENT PEKERJAAN,PANJANG KMS,DETAIL PEKERJAAN,VOLUME PEKERJAAN,TITIK KOORDINAT AWAL,TITIK KOORDINAT AKHIR,REALISASI PEMELIHARAAN (KMS),KETERANGAN EVIDEN,LINK FOLDER EVIDEN,STATUS LAPORAN';
+
+  const folderUrlByDate = new Map<string, string>();
+  const keteranganByDateAndDetail = new Map<string, string[]>();
+  for (const ev of evidenList) {
+    const dKey = normalizeCsvDateKey(ev.tanggalRealisasi);
+    const detKey = String(ev.detailPekerjaan || '').trim().toUpperCase();
+    if (ev.driveFolderUrl) {
+      folderUrlByDate.set(dKey, ev.driveFolderUrl);
+    }
+    const cleanKet = String(ev.keterangan || '').trim();
+    if (cleanKet && detKey) {
+      const k = `${dKey}|${detKey}`;
+      const existing = keteranganByDateAndDetail.get(k) || [];
+      if (!existing.includes(cleanKet)) {
+        existing.push(cleanKet);
+        keteranganByDateAndDetail.set(k, existing);
+      }
+    }
+  }
+
+  const rawRows: string[][] = [];
+  const coveredDateDetailPairs = new Set<string>();
+
   for (const r of reports) {
     const items =
       r.pekerjaanList.length > 0
@@ -390,26 +427,74 @@ function buildHvbCsvContent(reports: HvbRealisasiReport[]): string {
     const realisasiPemeliharaanKms =
       r.realisasiPemeliharaanKms ??
       getRealisasiPemeliharaanDetails(r.pekerjaanList || []).realisasiPemeliharaanKms;
+    const dKey = normalizeCsvDateKey(r.tanggalLaporan);
 
     for (const item of items) {
-      lines.push(
-        [
-          escapeCsvCell(r.timestampLaporan),
-          escapeCsvCell(r.tanggalLaporan),
-          escapeCsvCell(r.unitPelaksana),
-          escapeCsvCell(r.penyulang),
-          escapeCsvCell(r.keypoint),
-          escapeCsvCell(r.segment),
-          escapeCsvCell(r.panjangKms || '-'),
-          escapeCsvCell(item.detailPekerjaan),
-          escapeCsvCell(item.volume),
-          escapeCsvCell(r.koordinatAwal),
-          escapeCsvCell(r.koordinatAkhir),
-          escapeCsvCell(formatPemeliharaanKms(realisasiPemeliharaanKms)),
-          'SELESAI',
-        ].join(',')
-      );
+      const detKey = String(item.detailPekerjaan || '').trim().toUpperCase();
+      const pairKey = `${dKey}|${detKey}`;
+      if (dKey && detKey) {
+        coveredDateDetailPairs.add(pairKey);
+      }
+      const notes = keteranganByDateAndDetail.get(pairKey) || [];
+      rawRows.push([
+        String(r.timestampLaporan || ''),
+        String(r.tanggalLaporan || ''),
+        String(r.unitPelaksana || ''),
+        String(r.penyulang || ''),
+        String(r.keypoint || ''),
+        String(r.segment || ''),
+        String(r.panjangKms || '-'),
+        String(item.detailPekerjaan || ''),
+        String(item.volume ?? 0),
+        String(r.koordinatAwal || ''),
+        String(r.koordinatAkhir || ''),
+        formatPemeliharaanKms(realisasiPemeliharaanKms),
+        notes.join(' | '),
+        '',
+        'SELESAI',
+      ]);
     }
+  }
+
+  const addedEvidenPairs = new Set<string>();
+  for (const ev of [...evidenList].reverse()) {
+    const dKey = normalizeCsvDateKey(ev.tanggalRealisasi);
+    const detKey = String(ev.detailPekerjaan || '').trim().toUpperCase();
+    const pairKey = `${dKey}|${detKey}`;
+    if (coveredDateDetailPairs.has(pairKey) || addedEvidenPairs.has(pairKey)) continue;
+    addedEvidenPairs.add(pairKey);
+    const notes = keteranganByDateAndDetail.get(pairKey) || [];
+    rawRows.push([
+      String(ev.uploadedAt || ''),
+      dKey,
+      'HVB',
+      '-',
+      '-',
+      '-',
+      '-',
+      String(ev.detailPekerjaan || ''),
+      String(ev.files?.length || 1),
+      '-',
+      '-',
+      '0',
+      notes.join(' | '),
+      '',
+      'EVIDEN DIUPLOAD',
+    ]);
+  }
+
+  const shownDates = new Set<string>();
+  const lines = [header];
+  for (const cols of rawRows) {
+    const dKey = normalizeCsvDateKey(cols[1]);
+    const folderUrl = folderUrlByDate.get(dKey) || '';
+    if (folderUrl && !shownDates.has(dKey)) {
+      cols[13] = folderUrl;
+      shownDates.add(dKey);
+    } else {
+      cols[13] = '';
+    }
+    lines.push(cols.map((c) => escapeCsvCell(c)).join(','));
   }
   return lines.join('\r\n') + '\r\n';
 }
@@ -423,6 +508,9 @@ function saveState(state: WarehouseState): void {
   }
   if (!Array.isArray(state.hvbReports)) {
     state.hvbReports = [];
+  }
+  if (!Array.isArray(state.hvbEvidenList)) {
+    state.hvbEvidenList = [];
   }
   state.rows.forEach((r: MaterialRow, idx: number) => {
     r.rowNumber = idx + 2;
@@ -451,7 +539,7 @@ function saveState(state: WarehouseState): void {
     fs.writeFileSync(EXPORT_MIMS_CSV_PATH, mimsCsvContent, 'utf8');
     const yantekCsvContent = buildYantekCsvContent(state.yantekReports);
     fs.writeFileSync(EXPORT_YANTEK_CSV_PATH, yantekCsvContent, 'utf8');
-    const hvbCsvContent = buildHvbCsvContent(state.hvbReports);
+    const hvbCsvContent = buildHvbCsvContent(state.hvbReports, state.hvbEvidenList);
     fs.writeFileSync(EXPORT_HVB_CSV_PATH, hvbCsvContent, 'utf8');
   } catch (err) {
     console.warn('Warning: gagal menulis file state ke disk, tetap melanjutkan dengan memori:', err);
@@ -464,6 +552,7 @@ function createCleanWarehouseState(): WarehouseState {
     eksekusiMimsRows: [],
     yantekReports: [],
     hvbReports: [],
+    hvbEvidenList: [],
     logs: [
       {
         id: `clean-log-${Date.now()}`,
@@ -508,6 +597,9 @@ function loadState(): WarehouseState {
         }
         if (!Array.isArray(parsed.hvbReports)) {
           parsed.hvbReports = [];
+        }
+        if (!Array.isArray(parsed.hvbEvidenList)) {
+          parsed.hvbEvidenList = [];
         }
         parsed.rows = parsed.rows.map((r, idx) => ({
           ...r,
@@ -615,6 +707,7 @@ async function startServer() {
       eksekusiMimsRows: warehouseState.eksekusiMimsRows || [],
       yantekReports: warehouseState.yantekReports || [],
       hvbReports: warehouseState.hvbReports || [],
+      hvbEvidenList: warehouseState.hvbEvidenList || [],
       yantekSegments: TEKNIK_DB.segments,
       yantekPekerjaanCatalog: TEKNIK_DB.pekerjaanCatalog,
       logs: warehouseState.logs.slice(0, 150),
@@ -684,6 +777,7 @@ async function startServer() {
       koordinatAkhir = '',
       realisasiWo = 0,
       realisasiP0 = 0,
+      temuanButuhPadam = 0,
     } = req.body || {};
 
     if (!unitPelaksana || !segment) {
@@ -780,6 +874,7 @@ async function startServer() {
       koordinatAkhir: cleanAkhir,
       realisasiWo: Number(realisasiWo) || 0,
       realisasiP0: Number(realisasiP0) || 0,
+      temuanButuhPadam: Number(temuanButuhPadam) || 0,
       realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
     };
 
@@ -822,6 +917,7 @@ async function startServer() {
       segments: TEKNIK_DB.segments,
       pekerjaanCatalog: TEKNIK_DB.pekerjaanCatalog,
       reports: warehouseState.hvbReports || [],
+      evidenList: warehouseState.hvbEvidenList || [],
     });
   });
 
@@ -948,8 +1044,101 @@ async function startServer() {
     });
   });
 
+  app.post('/api/hvb/eviden', (req, res) => {
+    const rawItems: Partial<HvbEvidenRecord>[] = Array.isArray(req.body?.records)
+      ? req.body.records
+      : [req.body || {}];
+
+    if (rawItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimal 1 data detail pekerjaan eviden wajib dikirim.',
+      });
+    }
+
+    if (!Array.isArray(warehouseState.hvbEvidenList)) {
+      warehouseState.hvbEvidenList = [];
+    }
+
+    const sanitizedRecords: HvbEvidenRecord[] = [];
+    for (let i = 0; i < rawItems.length; i++) {
+      const payload = rawItems[i] || {};
+      const detailPekerjaan = String(payload.detailPekerjaan || '').trim();
+      const tanggalRealisasi = normalizeCsvDateKey(
+        payload.tanggalRealisasi || new Date().toISOString().slice(0, 10)
+      );
+      const driveFolderId = String(payload.driveFolderId || '').trim();
+      const driveFolderUrl = String(payload.driveFolderUrl || '').trim();
+
+      if (!detailPekerjaan) {
+        return res.status(400).json({
+          success: false,
+          message: `Detail Pekerjaan #${i + 1} wajib dipilih sebelum menyimpan eviden.`,
+        });
+      }
+      if (!driveFolderUrl || !driveFolderId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Link folder Google Drive eviden belum tersedia.',
+        });
+      }
+
+      const files = Array.isArray(payload.files)
+        ? payload.files.map((f) => ({
+            fileId: String(f?.fileId || ''),
+            fileName: String(f?.fileName || 'eviden.jpg'),
+            webViewLink: String(f?.webViewLink || ''),
+          }))
+        : [];
+
+      sanitizedRecords.push({
+        id: String(
+          payload.id || `HVB-EVD-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`
+        ),
+        tanggalRealisasi,
+        detailPekerjaan,
+        keterangan: String(payload.keterangan || '').trim(),
+        driveFolderId,
+        driveFolderUrl,
+        files,
+        uploadedAt: String(payload.uploadedAt || formatNowTimestamp()),
+      });
+    }
+
+    const insertedIds = new Set(sanitizedRecords.map((r) => r.id));
+    warehouseState.hvbEvidenList = [
+      ...sanitizedRecords,
+      ...warehouseState.hvbEvidenList.filter((item) => !insertedIds.has(item.id)),
+    ];
+    saveState(warehouseState);
+
+    return res.json({
+      success: true,
+      eviden: sanitizedRecords[0],
+      savedRecords: sanitizedRecords,
+      evidenList: warehouseState.hvbEvidenList,
+      message: `${sanitizedRecords.length} detail pekerjaan eviden (${sanitizedRecords[0].tanggalRealisasi}) berhasil disimpan.`,
+    });
+  });
+
+  app.delete('/api/hvb/eviden/:id', (req, res) => {
+    const { id } = req.params;
+    if (!Array.isArray(warehouseState.hvbEvidenList)) {
+      warehouseState.hvbEvidenList = [];
+    }
+    warehouseState.hvbEvidenList = warehouseState.hvbEvidenList.filter((e) => e.id !== id);
+    saveState(warehouseState);
+    res.json({
+      success: true,
+      evidenList: warehouseState.hvbEvidenList,
+    });
+  });
+
   app.get('/api/export/hvb-csv', (_req, res) => {
-    const csvData = buildHvbCsvContent(warehouseState.hvbReports || []);
+    const csvData = buildHvbCsvContent(
+      warehouseState.hvbReports || [],
+      warehouseState.hvbEvidenList || []
+    );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',

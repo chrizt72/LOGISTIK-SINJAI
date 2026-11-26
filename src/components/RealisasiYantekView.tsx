@@ -99,7 +99,8 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
   const [koordinatAwal, setKoordinatAwal] = useState<string>('');
   const [koordinatAkhir, setKoordinatAkhir] = useState<string>('');
   const [realisasiWo, setRealisasiWo] = useState<string>('');
-  const [realisasiP0, setRealisasiP0] = useState<string>('0');
+  const [realisasiP0, setRealisasiP0] = useState<string>('');
+  const [temuanButuhPadam, setTemuanButuhPadam] = useState<string>('');
   const [isLocatingGps, setIsLocatingGps] = useState<'awal' | 'akhir' | null>(null);
 
   // Submission & Feedback state
@@ -483,10 +484,30 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
       return;
     }
 
+    if (realisasiP0.trim() === '') {
+      setFormError('Jumlah Realisasi P0 wajib diisi oleh petugas.');
+      return;
+    }
+
+    if (temuanButuhPadam.trim() === '') {
+      setFormError('Temuan Butuh Padam wajib diisi oleh petugas.');
+      return;
+    }
+
     const numWo = Number(realisasiWo);
     const numP0 = Number(realisasiP0);
-    if (!Number.isFinite(numWo) || numWo < 0 || !Number.isFinite(numP0) || numP0 < 0) {
-      setFormError('Jumlah Realisasi WO dan P0 harus berupa angka valid.');
+    const numTemuan = Number(temuanButuhPadam);
+    if (
+      !Number.isFinite(numWo) ||
+      numWo < 0 ||
+      !Number.isFinite(numP0) ||
+      numP0 < 0 ||
+      !Number.isFinite(numTemuan) ||
+      numTemuan < 0
+    ) {
+      setFormError(
+        'Jumlah Realisasi WO, P0, dan Temuan Butuh Padam harus berupa angka valid.'
+      );
       return;
     }
 
@@ -523,6 +544,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
         koordinatAkhir: koordinatAkhir.trim(),
         realisasiWo: numWo,
         realisasiP0: numP0,
+        temuanButuhPadam: numTemuan,
         realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
       };
       let updatedReports: YantekRealisasiReport[] = [savedReport, ...reports];
@@ -544,6 +566,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
             koordinatAkhir: koordinatAkhir.trim(),
             realisasiWo: numWo,
             realisasiP0: numP0,
+            temuanButuhPadam: numTemuan,
             realisasiPemeliharaanKms: pemeliharaanSummary.realisasiPemeliharaanKms,
           }),
         });
@@ -584,7 +607,8 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
       setKoordinatAwal('');
       setKoordinatAkhir('');
       setRealisasiWo('');
-      setRealisasiP0('0');
+      setRealisasiP0('');
+      setTemuanButuhPadam('');
       setCompletedReportModal(savedReport);
     } catch (err: any) {
       if (onTriggerSound) onTriggerSound('error');
@@ -1124,7 +1148,7 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Jumlah Realisasi WO <span className="text-rose-500">*</span>
@@ -1140,19 +1164,36 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Jumlah Realisasi P0 <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  required
-                  value={realisasiP0}
-                  onChange={(e) => setRealisasiP0(e.target.value)}
-                  placeholder="0"
-                  className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Jumlah Realisasi P0 <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={realisasiP0}
+                    onChange={(e) => setRealisasiP0(e.target.value)}
+                    placeholder="Isi jumlah P0"
+                    className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Temuan Butuh Padam <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={temuanButuhPadam}
+                    onChange={(e) => setTemuanButuhPadam(e.target.value)}
+                    placeholder="Isi jumlah temuan"
+                    className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1346,7 +1387,8 @@ export const RealisasiYantekView: React.FC<RealisasiYantekViewProps> = ({
                   <div className="pt-1 border-t border-slate-200 dark:border-slate-700 font-mono text-[11px] text-slate-500">
                     Koordinat: {completedReportModal.koordinatAwal} s/d{' '}
                     {completedReportModal.koordinatAkhir} | WO: {completedReportModal.realisasiWo} | P0:{' '}
-                    {completedReportModal.realisasiP0}
+                    {completedReportModal.realisasiP0} | Temuan Butuh Padam:{' '}
+                    {completedReportModal.temuanButuhPadam ?? 0}
                   </div>
                 </div>
 
